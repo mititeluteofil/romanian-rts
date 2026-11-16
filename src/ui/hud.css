@@ -1,0 +1,118 @@
+:root {
+  --ink: #f4ecd8;
+  --panel: rgba(27, 32, 22, 0.86);
+  --edge: #c9a227;
+  --font: 'Courier New', ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #1b2a1b;
+  /* Stop the browser from scrolling, zooming or selecting during play. */
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+}
+
+#game canvas {
+  display: block;
+  image-rendering: pixelated;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--font);
+  color: var(--ink);
+  overflow: hidden;
+}
+
+#topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(6px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 6px
+    calc(10px + env(safe-area-inset-left));
+  background: var(--panel);
+  border-bottom: 2px solid var(--edge);
+  font-size: 14px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+#hud-selection {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  margin: 0 auto;
+  width: fit-content;
+  max-width: min(92vw, 520px);
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 2px solid var(--edge);
+  font-size: 13px;
+  text-align: center;
+  transition: opacity 0.6s;
+}
+
+#hint.hidden {
+  opacity: 0;
+}
+
+#debug {
+  position: absolute;
+  left: calc(6px + env(safe-area-inset-left));
+  bottom: calc(4px + env(safe-area-inset-bottom));
+  font-size: 10px;
+  opacity: 0.55;
+}
+
+.bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 3px 7px;
+  background: #f4ecd8;
+  color: #1b1b1b;
+  border: 2px solid #1b1b1b;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  margin-left: -4px;
+  border: 4px solid transparent;
+  border-top-color: #1b1b1b;
+}
