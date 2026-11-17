@@ -1,8 +1,8 @@
-import type { UnitKind } from './factions';
+import type { FactionId, UnitKind } from './factions';
 
 /** Building definitions. `era` is the first era in which it can be built. */
 
-export type BuildingKind = 'curte' | 'livada' | 'cazan' | 'tabara' | 'gater' | 'bloc' | 'mall';
+export type BuildingKind = 'curte' | 'livada' | 'cazan' | 'tabara' | 'cherhana' | 'gater' | 'bloc' | 'mall';
 
 export interface BuildingDef {
   readonly kind: BuildingKind;
@@ -21,6 +21,10 @@ export interface BuildingDef {
   readonly trains: readonly UnitKind[];
   /** Index into ERAS: the first era that knows how to build it. */
   readonly era: number;
+  /** If set, only this faction knows how to build it. */
+  readonly only?: FactionId;
+  /** Has to stand next to water. */
+  readonly needsWater?: boolean;
   readonly description: string;
 }
 
@@ -73,6 +77,20 @@ export const BUILDINGS: Readonly<Record<BuildingKind, BuildingDef>> = {
     era: 0,
     description: 'De aici vin oștenii.',
   },
+  cherhana: {
+    kind: 'cherhana',
+    name: 'Cherhana',
+    size: 2,
+    costLemn: 40,
+    buildTicks: 80,
+    hp: 300,
+    blocks: true,
+    trains: [],
+    era: 0,
+    only: 'dobrogea',
+    needsWater: true,
+    description: 'Pescărie la malul apei: aduce pește singură, fără țărani.',
+  },
   gater: {
     kind: 'gater',
     name: 'Gater',
@@ -112,7 +130,7 @@ export const BUILDINGS: Readonly<Record<BuildingKind, BuildingDef>> = {
 };
 
 /** What a peasant can put up, in menu order. */
-export const BUILD_MENU: readonly BuildingKind[] = ['livada', 'cazan', 'tabara', 'gater', 'bloc', 'mall'];
+export const BUILD_MENU: readonly BuildingKind[] = ['livada', 'cherhana', 'cazan', 'tabara', 'gater', 'bloc', 'mall'];
 
 /** How many peasants can pick plums in one orchard. */
 export const ORCHARD_CAPACITY = 3;

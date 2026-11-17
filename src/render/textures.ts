@@ -181,11 +181,23 @@ function drawSprite(ctx: Ctx, ox: number, rows: string[], palette: Record<string
 
 export const UNIT_FRAMES = ['idle', 'walk', 'work'] as const;
 
-/** Ardeal carries an axe, Moldova a sabre; held low, or raised to strike. */
+/** An axe, a sabre or a harpoon, by faction; held low, or raised to strike. */
 function drawWeapon(ctx: Ctx, ox: number, faction: FactionDef, raised: boolean): void {
-  const axe = faction.id === 'ardeal';
   const wood = '#5b3a1e';
   const steel = '#d6d6d6';
+  if (faction.weapon === 'spear') {
+    // A long shaft with a point: upright at rest, levelled forward to strike.
+    if (raised) {
+      px(ctx, ox + 9, 9, wood, 6, 1);
+      px(ctx, ox + 15, 9, steel);
+    } else {
+      px(ctx, ox + 14, 3, wood, 1, 11);
+      px(ctx, ox + 14, 2, steel);
+      px(ctx, ox + 13, 3, steel);
+    }
+    return;
+  }
+  const axe = faction.weapon === 'axe';
   if (raised) {
     for (let i = 0; i < 5; i++) px(ctx, ox + 12 + (i >> 1), 7 - i, axe ? wood : steel);
     if (axe) px(ctx, ox + 14, 2, steel, 2, 2);
@@ -219,7 +231,7 @@ export function buildUnitSheet(faction: FactionDef, kind: UnitKind): HTMLCanvasE
         e: '#1b1b1b',
         m: '#4a2f1a',
         // Peasants wear the white shirt; soldiers a suman over it.
-        w: soldier ? (faction.id === 'ardeal' ? '#56613f' : '#7a3b2b') : '#f4f1e6',
+        w: soldier ? hex(faction.coatColor) : '#f4f1e6',
         f: hex(faction.color),
         p: '#e2ddcc',
         b: '#4a2f1a',
@@ -409,6 +421,30 @@ function drawTabara(ctx: Ctx, faction: FactionDef): void {
   }
 }
 
+function drawCherhana(ctx: Ctx): void {
+  // 32×32 fishery: a reed-roofed hut, nets hung out to dry, a boat pulled up.
+  px(ctx, 1, 27, '#c9b783', 30, 4); // sand
+  px(ctx, 3, 14, '#a8895a', 15, 14);
+  for (let x = 3; x < 18; x += 3) px(ctx, x, 14, '#8a6e44', 1, 14);
+  for (let row = 0; row < 8; row++) px(ctx, 1 + row, 6 + row, row % 2 === 0 ? '#b59a4a' : '#9c8238', 19 - row * 2 + 8, 1);
+  px(ctx, 8, 20, '#3a2a1a', 4, 8);
+  // nets on a pole
+  px(ctx, 20, 12, '#5b3a1e', 1, 15);
+  px(ctx, 29, 12, '#5b3a1e', 1, 15);
+  px(ctx, 20, 12, '#5b3a1e', 10, 1);
+  for (let y = 14; y < 22; y += 2) {
+    for (let x = 21 + ((y >> 1) % 2); x < 29; x += 2) px(ctx, x, y, '#e8e2d0');
+  }
+  // the catch
+  px(ctx, 22, 23, '#9fb7c4', 3, 1);
+  px(ctx, 26, 24, '#9fb7c4', 3, 1);
+  // boat
+  px(ctx, 4, 28, '#6b4a2a', 12, 2);
+  px(ctx, 3, 27, '#6b4a2a', 1, 1);
+  px(ctx, 16, 27, '#6b4a2a', 1, 1);
+  px(ctx, 5, 28, '#8a6238', 10, 1);
+}
+
 function drawGater(ctx: Ctx): void {
   // 32×32 sawmill: a shed, a big circular blade, a stack of logs and planks.
   px(ctx, 2, 27, '#3c5a2a', 28, 4);
@@ -510,6 +546,9 @@ export function buildBuildingTexture(
       break;
     case 'tabara':
       drawTabara(ctx, faction);
+      break;
+    case 'cherhana':
+      drawCherhana(ctx);
       break;
     case 'gater':
       drawGater(ctx);

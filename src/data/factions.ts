@@ -1,14 +1,28 @@
 /**
  * Faction definitions. Everything faction-specific (names, colours, jokes,
- * unit stats, the signature ability) lives in data so a new faction or a new
- * joke never needs engine changes.
+ * unit stats, the signature ability, who cannot stand whom) lives in data so
+ * a new faction or a new joke never needs engine changes.
  */
 
-export type FactionId = 'ardeal' | 'moldova';
-export const FACTION_IDS: readonly FactionId[] = ['ardeal', 'moldova'];
+export type FactionId = 'ardeal' | 'moldova' | 'tara' | 'dobrogea' | 'otomani';
 
-export function enemyOf(faction: FactionId): FactionId {
-  return faction === 'ardeal' ? 'moldova' : 'ardeal';
+/** The principalities a person or the AI can play. */
+export const FACTION_IDS: readonly FactionId[] = ['ardeal', 'moldova', 'tara', 'dobrogea'];
+
+/** Not playable: they only turn up when the tribute is late. */
+export const RAIDERS: FactionId = 'otomani';
+
+export const ALL_FACTION_IDS: readonly FactionId[] = [...FACTION_IDS, RAIDERS];
+
+/** One fresh value per faction, for the simulation's per-faction tables. */
+export function perFaction<T>(make: (faction: FactionId) => T): Record<FactionId, T> {
+  return {
+    ardeal: make('ardeal'),
+    moldova: make('moldova'),
+    tara: make('tara'),
+    dobrogea: make('dobrogea'),
+    otomani: make('otomani'),
+  };
 }
 
 export type UnitKind = 'taran' | 'ostas' | 'smecher';
@@ -31,7 +45,7 @@ export interface UnitDef {
   readonly speedPercent?: number;
 }
 
-export type AbilityId = 'palinca' | 'taunt';
+export type AbilityId = 'palinca' | 'taunt' | 'rezolva' | 'plaja' | 'none';
 
 export interface AbilityDef {
   readonly id: AbilityId;
@@ -61,20 +75,47 @@ export interface FactionDef {
   readonly name: string;
   /** Belt / banner colour, 0xRRGGBB. */
   readonly color: number;
-  /** Hat colour — clop in Ardeal, căciulă in Moldova. */
+  /** Hat colour — clop in Ardeal, căciulă in Moldova… */
   readonly hatColor: number;
+  /** What the soldiers wear over the shirt. */
+  readonly coatColor: number;
+  readonly weapon: 'axe' | 'sabre' | 'spear';
   /** Walking speed in percent. Ardeal is in no hurry. */
   readonly speedPercent: number;
   /** Construction time in percent. Ardeal builds slowly… */
   readonly buildTimePercent: number;
   /** …but what it builds, lasts. */
   readonly buildingHpPercent: number;
+  /** What the food in the storehouse is called here. */
+  readonly foodName: string;
+  /** Whether the Ottomans send for tribute (Dobrogea already is theirs). */
+  readonly paysHaraci: boolean;
+  /** The Bucharest disease: in the present, its units crawl near their own court. */
+  readonly traffic: boolean;
+  /** The faction it cannot stand: +20% damage against it, and the AI's favourite target. */
+  readonly rival: FactionId | null;
+  /** What is said when marching on each of the others. */
+  readonly quips: Readonly<Partial<Record<FactionId, string>>>;
   readonly units: Readonly<Record<UnitKind, UnitDef>>;
   readonly ability: AbilityDef;
   /** One line shown on the faction picker. */
   readonly motto: string;
+  readonly builtLine: string;
+  readonly winLine: string;
+  readonly loseLine: string;
   readonly lines: Readonly<Record<LineKind, readonly string[]>>;
 }
+
+const SMECHER: UnitDef = {
+  name: 'Băiat de băiat',
+  hp: 60,
+  damage: 12,
+  cooldown: 9,
+  costPrune: 120,
+  costLemn: 0,
+  trainTicks: 150,
+  speedPercent: 130,
+};
 
 export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
   ardeal: {
@@ -82,15 +123,26 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
     name: 'Ardeal',
     color: 0x2e7d32,
     hatColor: 0x1b1b1b,
+    coatColor: 0x56613f,
+    weapon: 'axe',
     speedPercent: 80,
     buildTimePercent: 130,
     buildingHpPercent: 150,
+    foodName: 'Prune',
+    paysHaraci: true,
+    traffic: false,
+    rival: 'tara',
+    quips: {
+      moldova: 'Voi alergați, noi ajungem.',
+      tara: 'Destul am plătit io pentru voi, miticilor.',
+      dobrogea: 'No, venim la mare, da’ nu la plajă.',
+    },
     units: {
       taran: { name: 'Țăran', hp: 30, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
       // Mountain guard with an axe: slow, dear, hard to put down.
       ostas: { name: 'Plăieș', hp: 80, damage: 10, cooldown: 12, costPrune: 25, costLemn: 10, trainTicks: 120 },
       // Not from around here: dear, and he does not slow down for anybody.
-      smecher: { name: 'Băiat de băiat', hp: 60, damage: 12, cooldown: 9, costPrune: 120, costLemn: 0, trainTicks: 150, speedPercent: 130 },
+      smecher: SMECHER,
     },
     ability: {
       id: 'palinca',
@@ -101,6 +153,9 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
         'Toți ai tăi stau la un pahar, iar dușmanii din preajmă stau și mai mult. După aia ai tăi lucrează și dau mai tare.',
     },
     motto: '„No, om face noi și casa aceea, da’ amu’ stai să bem un pic de pălincă.”',
+    builtLine: 'No, vezi că s-o făcut.',
+    winLine: 'No, vezi că s-o putut. Am rămas numa’ noi. Amu’ putem sta.',
+    loseLine: 'No, asta-i: ne-or luat curtea. Om face alta, da’ mai încet.',
     lines: {
       select: ['No, ce-i?', 'Zî, mă.', 'Amu’ ce mai vrei?', 'No, servus.'],
       move: [
@@ -125,19 +180,31 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       scandal: ['No, ce-i gălăgia asta?', 'D-apăi ăștia nu-s de-ai noști.', 'No, mă uit și io un pic.'],
     },
   },
+
   moldova: {
     id: 'moldova',
     name: 'Moldova',
     color: 0xb71c1c,
     hatColor: 0x6d6d6d,
+    coatColor: 0x7a3b2b,
+    weapon: 'sabre',
     speedPercent: 115,
     buildTimePercent: 100,
     buildingHpPercent: 100,
+    foodName: 'Perje',
+    paysHaraci: true,
+    traffic: false,
+    rival: 'tara',
+    quips: {
+      ardeal: 'Până vă urniți voi, noi am gătat, wăi.',
+      tara: 'Capitala trebuia să fie la Ieși, wăi!',
+      dobrogea: 'Venim la mare, bre, cu tot cu sărmăluțe.',
+    },
     units: {
       taran: { name: 'Țăran', hp: 25, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
       // Free peasant with a sabre: cheap, quick, comes in numbers.
       ostas: { name: 'Răzeș', hp: 50, damage: 7, cooldown: 8, costPrune: 15, costLemn: 5, trainTicks: 70 },
-      smecher: { name: 'Băiat de băiat', hp: 60, damage: 12, cooldown: 9, costPrune: 120, costLemn: 0, trainTicks: 150, speedPercent: 130 },
+      smecher: SMECHER,
     },
     ability: {
       id: 'taunt',
@@ -148,6 +215,9 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
         'Un răzeș îi ia la întrebări pe dușmanii din preajmă: toți sar pe el, iar el încasează doar pe jumătate.',
     },
     motto: '„Și vrei, wăi? Și vrei, wăi?”',
+    builtLine: 'Gata-i, wăi!',
+    winLine: 'Și mai vrei, wăi? Nimica nu mai vrei! Am rămas numa’ noi.',
+    loseLine: 'Of, wăi… ne-o luat curtea. De la Ștefan n-am mai pățit așa ceva.',
     lines: {
       select: ['Și vrei, wăi?', 'Și-i, bre?', 'Zî, wăi!', 'Aista-s eu.'],
       move: ['Amuș, amuș!', 'Mă duc, wăi, mă duc!', 'Hai că-s gata.', 'Ca pe vremea lu’ Ștefan!'],
@@ -160,6 +230,152 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       die: ['Of, wăi…', 'M-o ajuns, bre.', 'Spuneți-i mamei…'],
       taunt: ['Și vrei, wăi? Și vrei, wăi?!', 'ȘI VREI, WĂI?!'],
       scandal: ['Uăi, se bat!', 'Ia uite, bre, scandal!', 'Și-o fi având, wăi?'],
+    },
+  },
+
+  tara: {
+    id: 'tara',
+    name: 'Țara Românească',
+    color: 0xf2c230,
+    hatColor: 0x2b3a67,
+    coatColor: 0x2b3a67,
+    weapon: 'sabre',
+    speedPercent: 100,
+    buildTimePercent: 100,
+    buildingHpPercent: 100,
+    foodName: 'Prune',
+    paysHaraci: true,
+    traffic: true,
+    rival: 'ardeal',
+    quips: {
+      ardeal: 'Hai, bă, mai repede, că ne prinde seara!',
+      moldova: 'Stați, bă, liniștiți acolo la voi.',
+      dobrogea: 'Litoralu’ e al nostru, bă, de la Mircea.',
+    },
+    units: {
+      taran: { name: 'Țăran', hp: 25, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
+      // Hired foot soldier: nothing special, always available.
+      ostas: { name: 'Dorobanț', hp: 60, damage: 8, cooldown: 9, costPrune: 20, costLemn: 5, trainTicks: 90 },
+      // At home in the malls of the capital: half the price, and quicker to turn up.
+      smecher: { ...SMECHER, costPrune: 60, trainTicks: 90 },
+    },
+    ability: {
+      id: 'rezolva',
+      name: 'Lasă, că se rezolvă',
+      costPalinca: 0,
+      cooldownTicks: 600,
+      description:
+        'Tot ce e în lucru — șantiere, oameni la rând, schimbarea vremurilor — se termină pe loc. O dată din patru nu se rezolvă nimic și te costă 30 de prune.',
+    },
+    motto: '„Lasă, bă, că se rezolvă.”',
+    builtLine: 'S-a rezolvat, șefu’.',
+    winLine: 'Ați văzut, bă? S-a rezolvat. Toată țara-i a noastră.',
+    loseLine: 'Nu s-a mai rezolvat, bă. Ne-au luat curtea.',
+    lines: {
+      select: ['Zi, bă.', 'Care-i treaba?', 'Să trăiți!', 'Ascult, șefu’.'],
+      move: ['Mă duc, bă, mă duc.', 'Imediat, șefu’.', 'Hai că ajung.'],
+      wood: ['Tăiem, bă, că altfel nu se face.', 'Hai la lemne.'],
+      plums: ['Culegem, șefu’.', 'Astea-s pentru țuică, nu?'],
+      build: ['Lasă, că se rezolvă.', 'Merge și-așa.', 'Îl facem, bă, n-ai grijă.'],
+      drink: ['Hai noroc, bă!', 'Să ne trăiești, șefu’!', 'Asta-i tare, bă.'],
+      full: ['Nu mai e loc, bă.'],
+      attack: ['Pe ei, bă!', 'Îi rezolvăm.', 'Lasă-i pe mâna mea.'],
+      die: ['M-au rezolvat, bă…', 'Aoleu…'],
+      taunt: ['Ce vrei, bă?!'],
+      scandal: ['Ia uite, bă, circ!', 'Iar ăștia…', 'Stai să filmez.'],
+    },
+  },
+
+  dobrogea: {
+    id: 'dobrogea',
+    name: 'Dobrogea',
+    color: 0x00838f,
+    hatColor: 0xb53a2a,
+    coatColor: 0x1f5a7a,
+    weapon: 'spear',
+    speedPercent: 100,
+    buildTimePercent: 100,
+    buildingHpPercent: 100,
+    foodName: 'Pește',
+    paysHaraci: false,
+    traffic: false,
+    rival: 'tara',
+    quips: {
+      ardeal: 'Veniți la mare o dată pe an și faceți pe deștepții.',
+      moldova: 'La noi nu-i cu „wăi”, îi cu briză.',
+      tara: 'Ajunge cu weekendu’ vostru la Vama!',
+    },
+    units: {
+      taran: { name: 'Țăran', hp: 25, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
+      // A sailor with a harpoon: the weakest soldier on the map, and the cheapest.
+      ostas: { name: 'Marinar', hp: 40, damage: 6, cooldown: 9, costPrune: 12, costLemn: 4, trainTicks: 70 },
+      smecher: SMECHER,
+    },
+    ability: {
+      id: 'plaja',
+      name: 'Hai la mare',
+      costPalinca: 0,
+      cooldownTicks: 450,
+      description:
+        'Oștenii dușmani din preajma curții lasă armele și se duc la plajă. Cât stau acolo, plătesc: 5 pești de căciulă.',
+    },
+    motto: '„Hai la mare, că-i păcat de vreme.”',
+    builtLine: 'Gata, a ieșit la țanc.',
+    winLine: 'Au plecat toți acasă. A rămas marea, și noi cu ea.',
+    loseLine: 'Ne-au luat curtea. Măcar marea n-o pot lua.',
+    lines: {
+      select: ['Zi, căpitane.', 'Aici!', 'Ce bate vântu’?', 'La ordin.'],
+      move: ['Pe-acolo-i vânt bun.', 'Ridic ancora.', 'Mă duc, căpitane.'],
+      wood: ['Lemn de barcă, bun.', 'Tai, da’ mi-e dor de apă.'],
+      plums: ['Prune? Eu-s cu peștele.', 'Hai și la livadă.'],
+      build: ['O fac ca pe-o barcă.', 'Să țină la furtună.'],
+      drink: ['Hai noroc, la valuri!', 'Pentru cei de pe mare!'],
+      full: ['Nu mai încape nici un cârlig.'],
+      attack: ['La abordaj!', 'Îi dăm la fund.', 'Harponu’ sus!'],
+      die: ['Mă duc la fund…', 'Spuneți-i mării…'],
+      taunt: ['Hai la apă, dacă ai curaj!'],
+      scandal: ['Ca-n port, la descărcat.', 'Iar s-au luat ăștia la harță.'],
+    },
+  },
+
+  otomani: {
+    id: 'otomani',
+    name: 'Poarta',
+    color: 0xc62828,
+    hatColor: 0xf2f2f2,
+    coatColor: 0x9a1f1f,
+    weapon: 'sabre',
+    speedPercent: 100,
+    buildTimePercent: 100,
+    buildingHpPercent: 100,
+    foodName: 'Peșcheș',
+    paysHaraci: false,
+    traffic: false,
+    rival: null,
+    quips: {},
+    units: {
+      taran: { name: 'Hamal', hp: 25, damage: 2, cooldown: 10, costPrune: 0, costLemn: 0, trainTicks: 1 },
+      // Come to collect: as tough as a plăieș, and there is always more than one.
+      ostas: { name: 'Ienicer', hp: 70, damage: 9, cooldown: 10, costPrune: 0, costLemn: 0, trainTicks: 1 },
+      smecher: SMECHER,
+    },
+    ability: { id: 'none', name: '', costPalinca: 0, cooldownTicks: 0, description: '' },
+    motto: '',
+    builtLine: '',
+    winLine: '',
+    loseLine: '',
+    lines: {
+      select: ['Unde-i haraciul?', 'Peșcheș, efendi!'],
+      move: ['Haide, haide!'],
+      wood: ['Haide!'],
+      plums: ['Haide!'],
+      build: ['Haide!'],
+      drink: ['Asta nu-i șerbet…', 'Numai un pic, să nu afle aga.'],
+      full: ['Yok.'],
+      attack: ['Haraciul, bre!', 'Plata la Poartă!'],
+      die: ['Aman…', 'Vai de zilele mele, efendi…'],
+      taunt: ['Haide!'],
+      scandal: ['Ce-i zarva asta, bre?', 'La Stambul nu-i așa ceva.'],
     },
   },
 };

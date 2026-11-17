@@ -3,7 +3,7 @@ import { AI_THINK_EVERY, SkirmishAi } from '../ai/skirmish';
 import { BUILD_MENU, BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
 import { BRIBE_ERA, COURT_NAMES, ERAS, LAST_ERA } from '../data/eras';
 import {
-  enemyOf,
+  FACTION_IDS,
   FACTIONS,
   SMECHER_LINES,
   type FactionId,
@@ -16,6 +16,7 @@ import { nearestTile } from '../sim/pathfinding';
 import { hash2 } from '../sim/rng';
 import {
   BRIBE_PRUNE,
+  CAPITAL_TAX,
   FUNDS_AMOUNT,
   SUB,
   TICK_MS,
@@ -49,7 +50,7 @@ const ENEMY_HP = 0xe05a4a;
 const UNIT_KINDS: readonly UnitKind[] = ['taran', 'ostas', 'smecher'];
 
 export interface GameOptions {
-  /** The faction the person at this device plays; the AI takes the other. */
+  /** The faction the person at this device plays; the AI takes the others. */
   readonly player: FactionId;
   /** Quiet neighbour: no war, the goal is to reach the present and open a mall. */
   readonly peaceful: boolean;
@@ -75,12 +76,13 @@ function pick<T>(items: readonly T[]): T {
 /** Draws the world and turns taps and button presses into simulation commands. */
 export class GameScene extends Phaser.Scene {
   private readonly player: FactionId;
-  private readonly enemy: FactionId;
   private readonly peaceful: boolean;
+  /** What the food is called here, in lower case: "prune", "perje", "pește". */
+  private readonly food: string;
   /** Whether pălincă is of any use to the player's faction. */
   private readonly drinks: boolean;
   private world!: World;
-  private ai!: SkirmishAi;
+  private ais: SkirmishAi[] = [];
   private controls!: CameraControls;
   private hud!: Hud;
   private minimap!: Minimap;
@@ -99,6 +101,10 @@ export class GameScene extends Phaser.Scene {
   private buildMenuOpen = false;
   /** Peaceful mode: the mall has been opened and celebrated. */
   private goalReached = false;
+  /** The player's court has fallen; the others may still be at it. */
+  private lost = false;
+  /** The capital took its cut of the funds that are about to be announced. */
+  private taxed = false;
   private markers: Mark[] = [];
   private sparks: Mark[] = [];
   private accumulator = 0;
@@ -107,14 +113,16 @@ export class GameScene extends Phaser.Scene {
   constructor(options: GameOptions) {
     super('game');
     this.player = options.player;
-    this.enemy = enemyOf(options.player);
     this.peaceful = options.peaceful;
+    this.food = FACTIONS[options.player].foodName.toLowerCase();
     this.drinks = FACTIONS[options.player].ability.id === 'palinca';
   }
 
   create(): void {
     this.world = new World({ seed: 1600 });
-    this.ai = new SkirmishAi(this.enemy, { attacks: !this.peaceful });
+    this.ais = FACTION_IDS.filter((f) => f !== this.player).map(
+      (f) => new SkirmishAi(f, { attacks: !this.peaceful }),
+    );
     this.hud = new Hud((id) => this.handleAction(id));
     const map = this.world.map;
 
@@ -195,7 +203,7 @@ export class GameScene extends Phaser.Scene {
     this.accumulator += Math.min(delta, MAX_FRAME_MS);
     while (this.accumulator >= TICK_MS) {
       this.world.step();
-      if (this.world.tick % AI_THINK_EVERY === 0) this.ai.think(this.world);
+      if (this.world.tick % AI_THINK_EVERY === 0) for (const ai of this.ais) ai.think(this.world);
       this.accumulator -= TICK_MS;
     }
     const alpha = this.accumulator / TICK_MS;
@@ -234,8 +242,7 @@ export class GameScene extends Phaser.Scene {
       case 'built': {
         const building = this.world.getBuilding(event.buildingId);
         if (building?.faction === this.player) {
-          const line = this.player === 'ardeal' ? 'No, vezi că s-o făcut.' : 'Gata-i, wăi!';
-          this.hud.say(`b${event.buildingId}`, line, time);
+          this.hud.say(`b${event.buildingId}`, FACTIONS[this.player].builtLine, time);
         }
         break;
       }
@@ -255,6 +262,20 @@ export class GameScene extends Phaser.Scene {
       case 'ability':
         if (event.ability === 'taunt') {
           this.speak(this.world.getUnit(event.unitId), 'taunt', time);
+        } else if (event.ability === 'rezolva') {
+          if (event.faction === this.player) {
+            const line =
+              event.count > 0
+                ? `S-a rezolvat: ${event.count === 1 ? 'un lucru e gata' : `${event.count} lucruri sunt gata`}.`
+                : 'Nu s-a rezolvat nimic. Și te-a mai costat și 30 de prune.';
+            this.hud.toast(line, time, 5000);
+          }
+        } else if (event.ability === 'plaja') {
+          if (event.faction === this.player) {
+            this.hud.toast(`Au plecat ${event.count} la plajă. Ți-au lăsat ${event.count * 5} pești.`, time, 5000);
+          } else if (this.world.units.some((u) => u.faction === this.player && u.stun > 0)) {
+            this.hud.toast('Oștenii tăi au lăsat armele și s-au dus la plajă.', time, 5000);
+          }
         } else {
           // Everybody with a glass in hand says something, friend or foe.
           for (const unit of this.world.units.filter((u) => u.drink > 0).slice(0, 8)) {
@@ -274,9 +295,53 @@ export class GameScene extends Phaser.Scene {
           this.hud.say(`b${event.buildingId}`, line, time);
         }
         break;
+      case 'tax':
+        if (event.faction === this.player) this.taxed = true;
+        break;
       case 'funds':
         if (event.faction === this.player) {
-          this.hud.toast(`Au intrat fondurile europene: +${FUNDS_AMOUNT} lemn, +${FUNDS_AMOUNT} prune.`, time, 4000);
+          const got = this.taxed ? FUNDS_AMOUNT - CAPITAL_TAX : FUNDS_AMOUNT;
+          const cut = this.taxed ? ` Încă ${CAPITAL_TAX} s-au dus la București, la centru.` : '';
+          this.hud.toast(`Au intrat fondurile europene: +${got} lemn, +${got} ${this.food}.${cut}`, time, 5000);
+          this.taxed = false;
+        }
+        break;
+      case 'summer':
+        if (this.player === 'dobrogea') {
+          this.hud.toast(
+            `A venit sezonul: ${event.visitors} principate la plajă. Bani buni, da’ uite ce-au lăsat în urmă.`,
+            time,
+            6000,
+          );
+        }
+        break;
+      case 'haraci':
+        if (event.faction === this.player) {
+          this.hud.toast(`Poarta cere haraci: ${event.amount} ${this.food}. Plătești, sau vin ienicerii.`, time);
+        }
+        break;
+      case 'haraciPaid':
+        if (event.faction === this.player) this.hud.toast('Haraciul s-a plătit. Deocamdată.', time, 4000);
+        break;
+      case 'raid':
+        if (event.faction === this.player) {
+          this.hud.toast(`Vin ienicerii: ${event.count}! Dau în curte o vreme și pleacă.`, time, 7000);
+        }
+        break;
+      case 'left':
+        this.unitSprites.get(event.unitId)?.destroy();
+        this.unitSprites.delete(event.unitId);
+        this.selectedUnits.delete(event.unitId);
+        break;
+      case 'eliminated':
+        if (event.faction === this.player) {
+          this.lost = true;
+          this.placing = null;
+          this.selectedUnits.clear();
+          this.selectedBuilding = null;
+          this.hud.toast(FACTIONS[this.player].loseLine, time);
+        } else if (this.world.winner === null && !this.lost) {
+          this.hud.toast(`${FACTIONS[event.faction].name} a rămas fără curte.`, time, 5000);
         }
         break;
       case 'scandal':
@@ -304,20 +369,9 @@ export class GameScene extends Phaser.Scene {
         this.placing = null;
         this.selectedUnits.clear();
         this.selectedBuilding = null;
-        this.hud.toast(this.endLine(event.faction === this.player), time);
+        if (event.faction === this.player) this.hud.toast(FACTIONS[this.player].winLine, time);
         break;
     }
-  }
-
-  private endLine(won: boolean): string {
-    if (this.player === 'ardeal') {
-      return won
-        ? 'No, vezi că s-o putut. Curtea Moldovei îi jos. Amu’ putem sta.'
-        : 'No, asta-i: ne-or luat curtea. Om face alta, da’ mai încet.';
-    }
-    return won
-      ? 'Și mai vrei, wăi? Nimica nu mai vrei! Curtea Ardealului îi a noastră.'
-      : 'Of, wăi… ne-o luat curtea ardelenii. Și nici nu s-or grăbit.';
   }
 
   private speak(unit: Unit | undefined, kind: LineKind, time: number): void {
@@ -470,7 +524,7 @@ export class GameScene extends Phaser.Scene {
     const era = ERAS[world.era[player]]!;
     this.hud.setTitle(`${REGION_NAMES[region]} · ${era.name}, ${era.year}`);
     this.hud.setStock(
-      `Lemn ${stock.lemn} · Prune ${stock.prune} · ` +
+      `Lemn ${stock.lemn} · ${FACTIONS[player].foodName} ${stock.prune} · ` +
         (this.drinks ? `Pălincă ${stock.palinca} · ` : '') +
         `Țărani ${world.unitCount(player, 'taran')} · Oșteni ${world.fighterCount(player)} ` +
         `(loc: ${world.unitCap(player)})`,
@@ -484,7 +538,12 @@ export class GameScene extends Phaser.Scene {
 
   private objectiveText(time: number): string {
     const world = this.world;
-    if (world.winner !== null) return world.winner === this.player ? 'Ai câștigat.' : 'Ai pierdut.';
+    if (world.winner === this.player) return 'Ai câștigat.';
+    if (this.lost || world.winner !== null) return 'Ai pierdut.';
+    const owed = world.haraci[this.player];
+    if (owed.due > 0) {
+      return `Haraci: ${owed.amount} ${this.food}, în ${Math.ceil(owed.due / TICK_RATE)} s. Altfel vin ienicerii.`;
+    }
     if (this.peaceful) {
       const hasMall = world.buildings.some((b) => b.faction === this.player && b.kind === 'mall' && b.done);
       if (hasMall && !this.goalReached) {
@@ -497,10 +556,11 @@ export class GameScene extends Phaser.Scene {
       }
       return hasMall ? 'Țel atins: ai ajuns în prezent și ai mall.' : 'Țel: ajungi în Prezent și faci un mall.';
     }
-    const mine = world.courtOf(this.player);
-    const theirs = world.courtOf(this.enemy);
-    const hp = (b: Building | undefined) => (b ? `${b.hp}/${b.maxHp}` : '—');
-    return `Țel: dărâmă curtea din ${FACTIONS[this.enemy].name}. A ta ${hp(mine)} · a lor ${hp(theirs)}`;
+    const courts = world
+      .alive()
+      .map((f) => `${f === this.player ? 'a ta' : FACTIONS[f].name} ${world.courtOf(f)?.hp ?? 0}`)
+      .join(' · ');
+    return `Țel: rămâi ultimul cu curtea în picioare. Curți: ${courts}`;
   }
 
   private bubbleAnchor(key: string): { x: number; y: number } | undefined {
@@ -572,7 +632,7 @@ export class GameScene extends Phaser.Scene {
   private actionButtons(): ActionButton[] {
     const world = this.world;
     const player = this.player;
-    if (world.winner !== null) {
+    if (world.winner !== null || this.lost) {
       return [{ id: 'restart', label: 'Joacă din nou', enabled: true, primary: true }];
     }
     if (this.placing) {
@@ -601,13 +661,24 @@ export class GameScene extends Phaser.Scene {
     }
 
     const buttons: ActionButton[] = [];
-    if (hasPeasant) buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: true });
+    const owed = world.haraci[player];
+    if (owed.due > 0) {
+      buttons.push({
+        id: 'haraci:pay',
+        label: 'Plătește haraciul',
+        detail: `${owed.amount} ${this.food}`,
+        enabled: world.stock[player].prune >= owed.amount,
+        primary: true,
+      });
+      buttons.push({ id: 'haraci:no', label: 'Nu plătesc', detail: 'vin ienicerii', enabled: true });
+    }
+    if (hasPeasant) buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: owed.due === 0 });
 
     const building = this.selectedBuilding === null ? undefined : world.getBuilding(this.selectedBuilding);
     if (building && building.faction === player) {
       for (const kind of world.trainable(building)) {
         const cost = world.unitCost(player, kind);
-        const price = cost.lemn > 0 ? `${cost.prune} prune, ${cost.lemn} lemn` : `${cost.prune} prune`;
+        const price = cost.lemn > 0 ? `${cost.prune} ${this.food}, ${cost.lemn} lemn` : `${cost.prune} ${this.food}`;
         buttons.push({
           id: `train:${kind}`,
           label: `${FACTIONS[player].units[kind].name} nou`,
@@ -620,7 +691,7 @@ export class GameScene extends Phaser.Scene {
         buttons.push({
           id: 'advance',
           label: `Treci în ${next.name}`,
-          detail: `${next.advanceLemn} lemn, ${next.advancePrune} prune`,
+          detail: `${next.advanceLemn} lemn, ${next.advancePrune} ${this.food}`,
           enabled: world.canAdvance(player),
         });
       }
@@ -629,7 +700,7 @@ export class GameScene extends Phaser.Scene {
         buttons.push({
           id: 'bribe',
           label: 'Dă șpagă',
-          detail: `${BRIBE_PRUNE} prune`,
+          detail: `${BRIBE_PRUNE} ${this.food}`,
           enabled: world.canBribe(player, building),
         });
       }
@@ -638,7 +709,9 @@ export class GameScene extends Phaser.Scene {
     const ability = FACTIONS[player].ability;
     const hasFighter = world.fighterCount(player) > 0;
     const hasStill = world.buildings.some((b) => b.faction === player && b.kind === 'cazan' && b.done);
-    if (ability.id === 'taunt' ? hasFighter : hasStill) {
+    const shown =
+      ability.id === 'taunt' ? hasFighter : ability.id === 'palinca' ? hasStill : ability.id !== 'none';
+    if (shown) {
       const wait = Math.ceil(world.abilityCooldown[player] / TICK_RATE);
       const detail =
         wait > 0 ? `gata în ${wait} s` : ability.costPalinca > 0 ? `${ability.costPalinca} pălinci` : 'gata';
@@ -674,6 +747,9 @@ export class GameScene extends Phaser.Scene {
       this.world.issue({ type: 'advance', faction: player });
     } else if (id === 'bribe' && building !== null) {
       this.world.issue({ type: 'bribe', faction: player, buildingId: building });
+    } else if (id === 'haraci:pay' || id === 'haraci:no') {
+      this.world.issue({ type: 'haraci', faction: player, pay: id === 'haraci:pay' });
+      this.hud.hideToast();
     } else if (id === 'ability') {
       this.useAbility();
     } else if (id === 'deselect') {
@@ -685,9 +761,12 @@ export class GameScene extends Phaser.Scene {
   private useAbility(): void {
     const player = this.player;
     const now = this.time.now;
-    if (FACTIONS[player].ability.id === 'palinca') {
+    const ability = FACTIONS[player].ability.id;
+    if (ability !== 'taunt') {
       this.world.issue({ type: 'ability', faction: player });
-      this.hud.toast('Stau cu toții la o pălincă. După aia merge treaba mai bine.', now, 4000);
+      if (ability === 'palinca') {
+        this.hud.toast('Stau cu toții la o pălincă. După aia merge treaba mai bine.', now, 4000);
+      }
       return;
     }
     // Taunt: a selected soldier does the shouting; failing that, whoever is closest to trouble.
@@ -733,7 +812,7 @@ export class GameScene extends Phaser.Scene {
 
   private handleTap(worldX: number, worldY: number): void {
     const now = this.time.now;
-    if (this.world.winner !== null) return;
+    if (this.world.winner !== null || this.lost) return;
     const tx = Math.floor(worldX / TILE);
     const ty = Math.floor(worldY / TILE);
 
@@ -753,7 +832,7 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       this.world.issue({ type: 'attack', faction: this.player, unitIds, targetId: unit.id });
-      this.speak(this.world.getUnit(unitIds[0]!), 'attack', now);
+      this.speakAttack(this.world.getUnit(unitIds[0]!), unit.faction, now);
       this.hud.hideToast();
       return;
     }
@@ -790,8 +869,17 @@ export class GameScene extends Phaser.Scene {
     }
     this.world.issue({ type: 'act', faction: this.player, unitIds, tx, ty });
     this.markers.push({ x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, bornAt: now });
-    this.speak(this.world.getUnit(unitIds[0]!), kind, now);
+    if (kind === 'attack' && building) this.speakAttack(this.world.getUnit(unitIds[0]!), building.faction, now);
+    else this.speak(this.world.getUnit(unitIds[0]!), kind, now);
     this.hud.hideToast();
+  }
+
+  /** Marching on another principality: half the time, say what you think of them. */
+  private speakAttack(unit: Unit | undefined, target: FactionId, time: number): void {
+    if (!unit) return;
+    const quip = unit.kind === 'smecher' ? undefined : FACTIONS[unit.faction].quips[target];
+    if (quip && Math.random() < 0.5) this.hud.say(`u${unit.id}`, quip, time);
+    else this.speak(unit, 'attack', time);
   }
 
   /** The unit under a tap, with a finger-sized tolerance. */

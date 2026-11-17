@@ -5,7 +5,19 @@ import { GameMap, generateRomania, latToY, lonToX, placeTile, Terrain } from '..
 import { findPath, nearestPassable, nearestTile } from '../src/sim/pathfinding';
 import { AI_THINK_EVERY, SkirmishAi } from '../src/ai/skirmish';
 import { ERAS, LAST_ERA } from '../src/data/eras';
-import { BRIBE_PRUNE, DISTILL_TICKS, FUNDS_AMOUNT, FUNDS_EVERY, SUB, World } from '../src/sim/world';
+import { FACTION_IDS, RAIDERS } from '../src/data/factions';
+import {
+  BRIBE_PRUNE,
+  CAPITAL_TAX,
+  DISTILL_TICKS,
+  FUNDS_AMOUNT,
+  FUNDS_EVERY,
+  HARACI_DEADLINE,
+  HARACI_EVERY,
+  SUB,
+  SUMMER_EVERY,
+  World,
+} from '../src/sim/world';
 
 function mapFromRows(rows: string[]): GameMap {
   const map = new GameMap(rows[0]!.length, rows.length);
@@ -164,14 +176,18 @@ function village(): { world: World; ids: number[] } {
 }
 
 describe('economy', () => {
-  it('starts with a court and three peasants at Alba Iulia and at Iași', () => {
+  it('starts with a court and three peasants in each of the four capitals', () => {
     const world = new World({ seed: 1600 });
     const alba = placeTile(PLACES.albaIulia);
-    const iasi = placeTile(PLACES.iasi);
-    expect(world.buildingAt(alba.x, alba.y)?.faction).toBe('ardeal');
-    expect(world.buildingAt(iasi.x, iasi.y)?.faction).toBe('moldova');
-    expect(world.unitCount('ardeal')).toBe(3);
-    expect(world.unitCount('moldova')).toBe(3);
+    const towns = { ardeal: PLACES.albaIulia, moldova: PLACES.iasi, tara: PLACES.targoviste, dobrogea: PLACES.constanta };
+    for (const faction of FACTION_IDS) {
+      const town = placeTile(towns[faction as keyof typeof towns]);
+      const court = world.courtOf(faction)!;
+      expect(Math.abs(court.tx - town.x) + Math.abs(court.ty - town.y), faction).toBeLessThan(6);
+      expect(world.unitCount(faction), faction).toBe(3);
+    }
+    expect(world.alive()).toEqual([...FACTION_IDS]);
+    expect(world.unitCount(RAIDERS)).toBe(0);
     for (const u of world.units) expect(world.map.isPassable(Math.floor(u.x / SUB), Math.floor(u.y / SUB))).toBe(true);
     expect(nearestTile(world.map, alba.x, alba.y, (i) => world.map.wood[i]! > 0, 12)).not.toBe(-1);
   });
@@ -434,6 +450,16 @@ describe('combat', () => {
     expect(world.courtOf('moldova')!.hp).toBeLessThan(world.courtOf('moldova')!.maxHp);
   });
 
+  it('an army sent at a building leaves the peasants alone', () => {
+    const world = battlefield();
+    const attacker = world.spawnUnit('ardeal', 30, 7, 'ostas');
+    const peasant = world.spawnUnit('moldova', 33, 7);
+    world.issue({ type: 'attack', faction: 'ardeal', unitIds: [attacker.id], targetId: world.courtOf('moldova')!.id });
+    run(world, 250);
+    expect(peasant.hp).toBe(peasant.maxHp);
+    expect(world.courtOf('moldova')!.hp).toBeLessThan(world.courtOf('moldova')!.maxHp);
+  });
+
   it('Ardeal builds tougher walls', () => {
     const world = battlefield();
     expect(world.courtOf('ardeal')!.maxHp).toBe(1800);
@@ -544,7 +570,7 @@ describe('eras', () => {
     expect(world.stock.ardeal).toMatchObject({ lemn: 0, prune: 0 });
     expect(world.canAdvance('ardeal')).toBe(false); // already on its way
     run(world, 199);
-    expect(world.era).toEqual({ ardeal: 0, moldova: 1 });
+    expect(world.era).toMatchObject({ ardeal: 0, moldova: 1 });
     run(world, 59);
     expect(world.era.ardeal).toBe(0);
     world.step();
@@ -719,7 +745,7 @@ describe('eras', () => {
   });
 
   it('a quiet AI neighbour walks through the eras, ends up with a mall and never marches', () => {
-    const world = new World({ seed: 1600 });
+    const world = new World({ seed: 1600, haraci: false });
     const ai = new SkirmishAi('moldova', { attacks: false });
     const hasMall = () => world.buildings.some((b) => b.faction === 'moldova' && b.kind === 'mall' && b.done);
     for (let i = 0; i < 60000 && !hasMall(); i++) {
@@ -732,5 +758,220 @@ describe('eras', () => {
     const court = world.courtOf('ardeal')!;
     expect(court.hp).toBe(court.maxHp);
     expect(world.winner).toBeNull();
+  });
+});
+
+describe('four principalities and the Porte', () => {
+  /** The battlefield, with Țara Românească and Dobrogea holding court as well. */
+  function fourWay(options: { haraci?: boolean } = {}): World {
+    const map = mapFromRows([
+      ...Array.from({ length: 16 }, () => '.'.repeat(40)),
+      '~'.repeat(40), // a shore along the south
+    ]);
+    const world = new World({ seed: 1, map, haraci: options.haraci ?? false });
+    world.placeBuilding('curte', 'ardeal', 1, 1, true);
+    world.placeBuilding('curte', 'moldova', 36, 1, true);
+    world.placeBuilding('curte', 'tara', 1, 11, true);
+    world.placeBuilding('curte', 'dobrogea', 36, 11, true);
+    return world;
+  }
+
+  it('the last court standing wins; a fallen principality goes home', () => {
+    const world = fourWay();
+    const lost = world.spawnUnit('moldova', 30, 3);
+    world.placeBuilding('livada', 'moldova', 30, 5, true);
+    world.courtOf('moldova')!.hp = 0;
+    world.step();
+    expect(world.alive()).toEqual(['ardeal', 'tara', 'dobrogea']);
+    expect(world.winner).toBeNull();
+    expect(world.getUnit(lost.id)).toBeUndefined();
+    expect(world.buildings.some((b) => b.faction === 'moldova')).toBe(false);
+    expect(world.drainEvents().some((e) => e.type === 'eliminated' && e.faction === 'moldova')).toBe(true);
+    world.courtOf('tara')!.hp = 0;
+    world.courtOf('dobrogea')!.hp = 0;
+    world.step();
+    expect(world.winner).toBe('ardeal');
+  });
+
+  it('hits land harder on the rival', () => {
+    const firstHit = (victim: 'tara' | 'moldova') => {
+      const world = fourWay();
+      const attacker = world.spawnUnit('ardeal', 20, 6, 'ostas');
+      const target = world.spawnUnit(victim, 21, 6, 'ostas');
+      target.drink = 1000;
+      world.issue({ type: 'attack', faction: 'ardeal', unitIds: [attacker.id], targetId: target.id });
+      run(world, 3);
+      return target.maxHp - target.hp;
+    };
+    expect(firstHit('moldova')).toBe(10);
+    expect(firstHit('tara')).toBe(12);
+  });
+
+  it('only Dobrogea builds a fishery, only on the shore, and it feeds itself', () => {
+    const world = fourWay();
+    expect(world.canBuild('dobrogea', 'cherhana')).toBe(true);
+    expect(world.canBuild('ardeal', 'cherhana')).toBe(false);
+    expect(world.canPlace('cherhana', 20, 5)).toBe(false);
+    expect(world.canPlace('cherhana', 20, 14)).toBe(true);
+    world.placeBuilding('cherhana', 'dobrogea', 20, 14, true);
+    const before = world.stock.dobrogea.prune;
+    run(world, 150);
+    expect(world.stock.dobrogea.prune).toBe(before + 10);
+  });
+
+  it('„Lasă, că se rezolvă” finishes everything in progress — three times out of four', () => {
+    const tryIt = (seed: number) => {
+      const map = mapFromRows(Array.from({ length: 16 }, () => '.'.repeat(40)));
+      const world = new World({ seed, map });
+      const court = world.placeBuilding('curte', 'tara', 1, 11, true);
+      world.stock.tara.prune = 100;
+      const site = world.placeBuilding('livada', 'tara', 10, 10, false);
+      const camp = world.placeBuilding('tabara', 'tara', 14, 10, true);
+      world.issue({ type: 'train', faction: 'tara', buildingId: court.id });
+      world.issue({ type: 'train', faction: 'tara', buildingId: camp.id });
+      world.step();
+      const prune = world.stock.tara.prune;
+      world.issue({ type: 'ability', faction: 'tara' });
+      run(world, 2);
+      return { done: site.done, units: world.unitCount('tara'), lost: prune - world.stock.tara.prune, ready: world.abilityReady('tara') };
+    };
+    const outcomes = Array.from({ length: 24 }, (_, seed) => tryIt(seed + 1));
+    const worked = outcomes.filter((o) => o.done);
+    const failed = outcomes.filter((o) => !o.done);
+    expect(worked.length).toBeGreaterThan(12);
+    expect(failed.length).toBeGreaterThan(0);
+    for (const o of worked) expect(o).toEqual({ done: true, units: 2, lost: 0, ready: false });
+    for (const o of failed) expect(o).toEqual({ done: false, units: 0, lost: 30, ready: false });
+  });
+
+  it('with nothing in progress there is nothing to sort out, and no cooldown', () => {
+    const world = fourWay();
+    world.issue({ type: 'ability', faction: 'tara' });
+    world.step();
+    expect(world.abilityReady('tara')).toBe(true);
+  });
+
+  it('„Hai la mare” sends enemy soldiers at the gates to the beach, for a fee', () => {
+    const world = fourWay();
+    const near = world.spawnUnit('ardeal', 33, 10, 'ostas');
+    const peasant = world.spawnUnit('ardeal', 33, 12);
+    const far = world.spawnUnit('ardeal', 10, 5, 'ostas');
+    const before = world.stock.dobrogea.prune;
+    world.issue({ type: 'ability', faction: 'dobrogea' });
+    world.step();
+    expect(near.stun).toBeGreaterThan(0);
+    expect(peasant.stun).toBe(0);
+    expect(far.stun).toBe(0);
+    expect(world.stock.dobrogea.prune).toBe(before + 5);
+    expect(world.abilityReady('dobrogea')).toBe(false);
+  });
+
+  it('the Porte asks for tribute — but not from Dobrogea, and not after independence', () => {
+    const world = fourWay({ haraci: true });
+    world.era.moldova = 2;
+    run(world, HARACI_EVERY);
+    const asked = world.drainEvents().filter((e) => e.type === 'haraci');
+    expect(asked).toEqual([
+      { type: 'haraci', faction: 'ardeal', amount: 30 },
+      { type: 'haraci', faction: 'tara', amount: 30 },
+    ]);
+    expect(world.haraci.ardeal.due).toBe(HARACI_DEADLINE);
+    expect(world.haraci.dobrogea.due).toBe(0);
+    expect(world.haraci.moldova.due).toBe(0);
+  });
+
+  it('paying keeps the janissaries at home; the next demand is bigger', () => {
+    const world = fourWay({ haraci: true });
+    run(world, HARACI_EVERY);
+    const prune = world.stock.ardeal.prune;
+    world.issue({ type: 'haraci', faction: 'ardeal', pay: true });
+    run(world, HARACI_DEADLINE + 5);
+    expect(world.stock.ardeal.prune).toBe(prune - 30);
+    expect(world.units.some((u) => u.faction === RAIDERS && u.order.type === 'attack' && u.order.target === world.courtOf('ardeal')!.id)).toBe(false);
+    run(world, HARACI_EVERY - HARACI_DEADLINE - 5);
+    expect(world.haraci.ardeal.amount).toBe(45);
+  });
+
+  it('not paying — or not answering — brings a raid that goes home after a while', () => {
+    const world = fourWay({ haraci: true });
+    world.era.moldova = 2; // past paying tribute, so only Ardeal and Țara Românească are asked
+    run(world, HARACI_EVERY);
+    world.drainEvents();
+    world.issue({ type: 'haraci', faction: 'ardeal', pay: false });
+    world.step();
+    const raiders = () => world.units.filter((u) => u.faction === RAIDERS);
+    expect(raiders()).toHaveLength(3); // Ardeal said no
+    run(world, HARACI_DEADLINE);
+    expect(raiders()).toHaveLength(3); // the first three left, three more came for Țara Românească's silence
+    const events = world.drainEvents();
+    expect(events.filter((e) => e.type === 'raid').map((e) => e.type === 'raid' && e.faction)).toEqual(['ardeal', 'tara']);
+    expect(events.filter((e) => e.type === 'left')).toHaveLength(3);
+    const court = world.courtOf('ardeal')!;
+    expect(court.hp).toBeLessThan(court.maxHp);
+    expect(court.hp).toBeGreaterThan(0);
+    // Next time they come in greater numbers.
+    run(world, HARACI_EVERY - HARACI_DEADLINE - 1);
+    world.issue({ type: 'haraci', faction: 'ardeal', pay: false });
+    world.step();
+    expect(world.units.filter((u) => u.faction === RAIDERS && u.order.type === 'attack' && u.order.target === court.id)).toHaveLength(5);
+  });
+
+  it('once Țara Românească reaches the present, the capital takes its cut', () => {
+    const world = fourWay();
+    for (const f of ['ardeal', 'moldova', 'tara'] as const) world.era[f] = LAST_ERA;
+    const before = { ardeal: world.stock.ardeal.lemn, tara: world.stock.tara.lemn, dobrogea: world.stock.dobrogea.lemn };
+    run(world, FUNDS_EVERY);
+    expect(world.stock.ardeal.lemn).toBe(before.ardeal + FUNDS_AMOUNT - CAPITAL_TAX);
+    expect(world.stock.tara.lemn).toBe(before.tara + FUNDS_AMOUNT + 2 * CAPITAL_TAX);
+    expect(world.stock.dobrogea.lemn).toBe(before.dobrogea); // still in 1600: no funds, no tax
+    expect(world.drainEvents().filter((e) => e.type === 'tax')).toHaveLength(2);
+  });
+
+  it('in the present, Țara Românească is stuck in its own traffic near the court', () => {
+    const walked = (era: number) => {
+      const world = fourWay();
+      world.era.tara = era;
+      const unit = world.spawnUnit('tara', 5, 13);
+      world.issue({ type: 'move', faction: 'tara', unitIds: [unit.id], tx: 30, ty: 13 });
+      run(world, 20);
+      return unit.x;
+    };
+    expect(walked(LAST_ERA)).toBeLessThan(walked(0));
+  });
+
+  it('summer on the coast: Dobrogea gets paid and the place gets worn', () => {
+    const world = fourWay();
+    world.era.dobrogea = LAST_ERA;
+    const court = world.courtOf('dobrogea')!;
+    const prune = world.stock.dobrogea.prune;
+    run(world, SUMMER_EVERY);
+    // Three visiting principalities at 15 each, plus one round of European funds (900 > 600).
+    expect(world.stock.dobrogea.prune).toBe(prune + 45 + FUNDS_AMOUNT);
+    expect(court.hp).toBe(court.maxHp - 36);
+    expect(world.drainEvents().some((e) => e.type === 'summer' && e.visitors === 3)).toBe(true);
+  });
+
+  it('four AIs settle in, pay their tribute and play the same match twice', () => {
+    const play = () => {
+      const world = new World({ seed: 1600 });
+      const ais = FACTION_IDS.map((f) => new SkirmishAi(f));
+      const sums: number[] = [];
+      let raids = 0;
+      for (let i = 0; i < 2900; i++) {
+        world.step();
+        if (world.tick % AI_THINK_EVERY === 0) for (const ai of ais) ai.think(world);
+        raids += world.drainEvents().filter((e) => e.type === 'raid').length;
+        if (i % 50 === 0) sums.push(world.checksum());
+      }
+      return { world, sums, raids };
+    };
+    const a = play();
+    expect(a.raids).toBe(0);
+    for (const f of FACTION_IDS) {
+      const kinds = a.world.buildings.filter((b) => b.faction === f && b.done).map((b) => b.kind);
+      expect(kinds, f).toContain('tabara');
+    }
+    expect(a.world.buildings.some((b) => b.kind === 'cherhana' && b.faction === 'dobrogea')).toBe(true);
+    expect(play().sums).toEqual(a.sums);
   });
 });

@@ -221,8 +221,6 @@ body {
   position: fixed;
   inset: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
   padding: 16px;
   background: #1b2a1b;
   font-family: var(--font);
@@ -235,6 +233,8 @@ body {
 }
 
 #menu-box {
+  /* Auto margins centre it and still let a tall menu scroll from the top. */
+  margin: auto;
   width: min(100%, 520px);
   padding: 18px;
   background: var(--panel);

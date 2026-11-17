@@ -1,6 +1,6 @@
 import { BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
 import { ERAS, LAST_ERA } from '../data/eras';
-import { enemyOf, FACTIONS, isFighter, type FactionId } from '../data/factions';
+import { FACTIONS, isFighter, type FactionId } from '../data/factions';
 import { Terrain } from '../sim/map';
 import { nearestTile } from '../sim/pathfinding';
 import { SUB, type Building, type Unit, type World } from '../sim/world';
@@ -19,6 +19,7 @@ const FIRST_ATTACK_TICK = 3000;
 /** Keep this much of each resource in hand when paying for a new era. */
 const ERA_RESERVE = 60;
 const WANTED_SMECHERI = 2;
+const BEACH_RADIUS = 8 * SUB;
 
 export interface AiOptions {
   /** false = a quiet neighbour: builds, defends its court, never marches. */
@@ -42,6 +43,7 @@ function distSq(ax: number, ay: number, bx: number, by: number): number {
  */
 export class SkirmishAi {
   private waveSize = FIRST_WAVE;
+  private wavesSent = 0;
   private readonly attacks: boolean;
 
   constructor(
@@ -61,12 +63,17 @@ export class SkirmishAi {
     const soldiers = mine.filter((u) => isFighter(u.kind));
     const buildings = world.buildings.filter((b) => b.faction === faction);
 
+    const owed = world.haraci[faction];
+    if (owed.due > 0 && world.stock[faction].prune >= owed.amount) {
+      world.issue({ type: 'haraci', faction, pay: true });
+    }
+
     // Commands only land next tick, so remember who was just given the hammer.
     const builder = this.growEconomy(world, court, peasants, buildings);
     this.putPeasantsToWork(world, court, peasants.filter((u) => u.id !== builder), buildings);
     this.raiseArmy(world, peasants, soldiers, buildings);
     this.command(world, court, soldiers);
-    this.useAbility(world, soldiers);
+    this.useAbility(world, court, soldiers, buildings);
   }
 
   // --- Economy ----------------------------------------------------------------
@@ -113,6 +120,7 @@ export class SkirmishAi {
     const count = (kind: BuildingKind) => buildings.filter((b) => b.kind === kind).length;
     let kindNext: BuildingKind | null = null;
     if (count('livada') === 0) kindNext = 'livada';
+    else if (world.canBuild(faction, 'cherhana') && count('cherhana') === 0) kindNext = 'cherhana';
     else if (count('tabara') === 0) kindNext = 'tabara';
     else if (FACTIONS[faction].ability.id === 'palinca' && count('cazan') === 0) kindNext = 'cazan';
     else if (era >= LAST_ERA && count('mall') === 0) kindNext = 'mall';
@@ -270,30 +278,72 @@ export class SkirmishAi {
 
     // Otherwise gather a wave at home, then march on the enemy court.
     const waiting = soldiers.filter((u) => u.order.type === 'idle');
-    const enemyCourt = world.courtOf(enemyOf(faction));
-    if (this.attacks && enemyCourt && world.tick >= FIRST_ATTACK_TICK && waiting.length >= this.waveSize) {
+    if (!this.attacks || world.tick < FIRST_ATTACK_TICK || waiting.length < this.waveSize) return;
+    const enemyCourt = this.pickTarget(world, cx, cy);
+    if (enemyCourt) {
       world.issue({ type: 'attack', faction, unitIds: waiting.slice(0, this.waveSize).map((u) => u.id), targetId: enemyCourt.id });
       this.waveSize = Math.min(BIGGEST_WAVE, this.waveSize + 2);
+      this.wavesSent++;
     }
   }
 
-  private useAbility(world: World, soldiers: Unit[]): void {
+  /** Waves alternate: the closest neighbour that is not the rival, then the rival. */
+  private pickTarget(world: World, cx: number, cy: number): Building | undefined {
+    const courts = world
+      .alive()
+      .filter((f) => f !== this.faction)
+      .map((f) => world.courtOf(f))
+      .filter((b): b is Building => b !== undefined);
+    const rival = FACTIONS[this.faction].rival;
+    const rivalCourt = courts.find((b) => b.faction === rival);
+    if (rivalCourt && (this.wavesSent % 2 === 1 || courts.length === 1)) return rivalCourt;
+    let best: Building | undefined;
+    let bestD = 0;
+    for (const b of courts) {
+      if (b === rivalCourt) continue;
+      const d = distSq(b.tx * SUB, b.ty * SUB, cx, cy);
+      if (!best || d < bestD) {
+        best = b;
+        bestD = d;
+      }
+    }
+    return best ?? rivalCourt;
+  }
+
+  private useAbility(world: World, court: Building, soldiers: Unit[], buildings: Building[]): void {
     const faction = this.faction;
     if (!world.abilityReady(faction)) return;
+    const ability = FACTIONS[faction].ability.id;
+
+    if (ability === 'rezolva') {
+      // Worth a try whenever two things are waiting, or the times are changing.
+      const busy = buildings.filter((b) => !b.done || b.queue.length > 0 || b.advanceLeft > 0);
+      if (busy.length >= 2 || busy.some((b) => b.advanceLeft > 0)) world.issue({ type: 'ability', faction });
+      return;
+    }
+
     const enemies = world.units.filter((u) => u.faction !== faction && isFighter(u.kind));
     if (enemies.length === 0) return;
-    const near = 3 * SUB;
-    const foesAround = (u: Unit) =>
-      enemies.filter((e) => distSq(u.x, u.y, e.x, e.y) <= near * near).length;
 
-    if (FACTIONS[faction].ability.id === 'taunt') {
+    if (ability === 'plaja') {
+      // Send them to the beach once a proper raiding party is at the gates.
+      const cx = (court.tx * 2 + BUILDINGS.curte.size) * (SUB / 2);
+      const cy = (court.ty * 2 + BUILDINGS.curte.size) * (SUB / 2);
+      const atTheGates = enemies.filter((e) => distSq(cx, cy, e.x, e.y) <= BEACH_RADIUS * BEACH_RADIUS);
+      if (atTheGates.length >= 2) world.issue({ type: 'ability', faction });
+      return;
+    }
+
+    const near = 3 * SUB;
+    const foesAround = (u: Unit) => enemies.filter((e) => distSq(u.x, u.y, e.x, e.y) <= near * near).length;
+    if (ability === 'taunt') {
       // The healthiest soldier with at least two enemies on him does the shouting.
       let best: Unit | undefined;
       for (const u of soldiers) {
         if (foesAround(u) >= 2 && (!best || u.hp > best.hp)) best = u;
       }
       if (best) world.issue({ type: 'ability', faction, unitId: best.id });
-    } else if (soldiers.filter((u) => foesAround(u) >= 1).length >= 2) {
+    } else if (ability === 'palinca' && soldiers.filter((u) => foesAround(u) >= 1).length >= 2) {
       // A round for everyone once a proper fight is on.
       world.issue({ type: 'ability', faction });
     }

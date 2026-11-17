@@ -1,10 +1,11 @@
 import { BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
 import { BRIBE_ERA, ERAS, LAST_ERA } from '../data/eras';
 import {
-  enemyOf,
   FACTION_IDS,
   FACTIONS,
   isFighter,
+  perFaction,
+  RAIDERS,
   type AbilityId,
   type FactionId,
   type UnitKind,
@@ -51,6 +52,47 @@ const SCANDAL_STUN = 50;
 const SCANDAL_MIN_GAP = 300;
 const SCANDAL_GAP_SPREAD = 200;
 const SCANDAL_RETRY = 50;
+/** The fishery lands one fish this often. */
+const CHERHANA_TICKS = 15;
+/** "Lasă, că se rezolvă": one time in this many it does not, and it costs. */
+const REZOLVA_FAILS_ONE_IN = 4;
+const REZOLVA_FAIL_PRUNE = 30;
+/** "Hai la mare": who goes to the beach, for how long, and what they pay. */
+const BEACH_RADIUS = 8 * SUB;
+const BEACH_STUN = 80;
+const BEACH_FEE = 5;
+/** Against the faction you cannot stand, hits land this much harder (percent). */
+const RIVAL_DAMAGE_PERCENT = 120;
+/** The capital's cut of everybody else's European funds. */
+export const CAPITAL_TAX = 10;
+/** Bucharest traffic: speed near the court in the present, and how near. */
+const TRAFFIC_SPEED_PERCENT = 70;
+const TRAFFIC_RADIUS = 8 * SUB;
+/** Summer on the coast, once Dobrogea has reached the present. */
+export const SUMMER_EVERY = 900;
+const SUMMER_FEE = 15;
+const SUMMER_WEAR_PERCENT = 3;
+/** Tribute to the Porte: how often, how long to pay, how much, until which era. */
+export const HARACI_EVERY = 1800;
+export const HARACI_DEADLINE = 300;
+const HARACI_BASE = 30;
+const HARACI_STEP = 15;
+const HARACI_LAST_ERA = 1;
+/** Unpaid tribute: how many janissaries come, and how long they stay. */
+const RAID_BASE = 3;
+const RAID_STEP = 2;
+const RAID_TICKS = 300;
+
+export interface Haraci {
+  /** Ticks left to pay; 0 when nothing is owed. */
+  due: number;
+  /** Plums asked for this time. */
+  amount: number;
+  /** How many times the Porte has asked so far. */
+  asked: number;
+  /** How many times it went home empty-handed. */
+  refused: number;
+}
 export const DISTILL_TICKS = 80;
 const DISTILL_PRUNE = 5;
 const DISTILL_LEMN = 1;
@@ -134,6 +176,8 @@ export interface Unit {
   stun: number;
   /** Băieți de băieți only: ticks until he starts the next scandal. */
   scandalIn: number;
+  /** Raiders only: ticks until they go home; 0 = stays, -1 = just left. */
+  expires: number;
 }
 
 export interface Building {
@@ -173,7 +217,9 @@ export type Command =
   /** Pay to have a building site or a training finished on the spot. */
   | { readonly type: 'bribe'; readonly faction: FactionId; readonly buildingId: number }
   /** The faction's signature ability; `unitId` is who does it, where that matters. */
-  | { readonly type: 'ability'; readonly faction: FactionId; readonly unitId?: number };
+  | { readonly type: 'ability'; readonly faction: FactionId; readonly unitId?: number }
+  /** Answer the Porte: pay the tribute, or refuse and take the raid now. */
+  | { readonly type: 'haraci'; readonly faction: FactionId; readonly pay: boolean };
 
 /** What an 'act' command at a tile would do. */
 export type ActKind = 'build' | 'plums' | 'wood' | 'attack' | 'move';
@@ -185,7 +231,21 @@ export type SimEvent =
   | { readonly type: 'distilled'; readonly buildingId: number }
   | { readonly type: 'trained'; readonly unitId: number }
   | { readonly type: 'full'; readonly unitId: number }
-  | { readonly type: 'ability'; readonly faction: FactionId; readonly ability: AbilityId; readonly unitId: number }
+  /** `count`: how many it touched (tourists, jobs hurried); 0 = it backfired. */
+  | {
+      readonly type: 'ability';
+      readonly faction: FactionId;
+      readonly ability: AbilityId;
+      readonly unitId: number;
+      readonly count: number;
+    }
+  | { readonly type: 'haraci'; readonly faction: FactionId; readonly amount: number }
+  | { readonly type: 'haraciPaid'; readonly faction: FactionId; readonly amount: number }
+  | { readonly type: 'raid'; readonly faction: FactionId; readonly count: number }
+  | { readonly type: 'left'; readonly unitId: number }
+  | { readonly type: 'tax'; readonly faction: FactionId }
+  | { readonly type: 'summer'; readonly visitors: number }
+  | { readonly type: 'eliminated'; readonly faction: FactionId }
   | { readonly type: 'hit'; readonly x: number; readonly y: number }
   | { readonly type: 'died'; readonly unitId: number; readonly faction: FactionId; readonly x: number; readonly y: number }
   | { readonly type: 'destroyed'; readonly buildingId: number; readonly faction: FactionId }
@@ -199,6 +259,8 @@ export interface WorldOptions {
   readonly seed: number;
   /** Supply a ready map (tests); otherwise Romania is generated. */
   readonly map?: GameMap;
+  /** Whether the Porte sends for tribute. Default: yes on Romania, no on a supplied map. */
+  readonly haraci?: boolean;
 }
 
 type Target = { readonly unit: Unit; readonly building?: undefined } | { readonly building: Building; readonly unit?: undefined };
@@ -213,23 +275,23 @@ export class World {
   readonly map: GameMap;
   readonly units: Unit[] = [];
   readonly buildings: Building[] = [];
-  readonly stock: Record<FactionId, Stock> = {
-    ardeal: { lemn: 50, prune: 30, palinca: 0 },
-    moldova: { lemn: 50, prune: 30, palinca: 0 },
-  };
+  readonly stock: Record<FactionId, Stock> = perFaction(() => ({ lemn: 50, prune: 30, palinca: 0 }));
   /** Ticks of "better after a drink" left per faction. */
-  readonly buff: Record<FactionId, number> = { ardeal: 0, moldova: 0 };
+  readonly buff: Record<FactionId, number> = perFaction(() => 0);
   /** Ticks until each faction's ability is ready again. */
-  readonly abilityCooldown: Record<FactionId, number> = { ardeal: 0, moldova: 0 };
+  readonly abilityCooldown: Record<FactionId, number> = perFaction(() => 0);
   /** Index into ERAS for each faction; they advance separately. */
-  readonly era: Record<FactionId, number> = { ardeal: 0, moldova: 0 };
-  /** Whoever still has a court when the other one's falls. */
+  readonly era: Record<FactionId, number> = perFaction(() => 0);
+  /** What each faction owes the Porte right now. */
+  readonly haraci: Record<FactionId, Haraci> = perFaction(() => ({ due: 0, amount: 0, asked: 0, refused: 0 }));
+  /** The last faction with a court standing. */
   winner: FactionId | null = null;
   tick = 0;
 
   /** Building id occupying each tile, 0 if none. */
   private readonly occupant: Int32Array;
   private readonly rng: Rng;
+  private readonly haraciOn: boolean;
   private nextId = 1;
   private pending: Command[] = [];
   private events: SimEvent[] = [];
@@ -238,14 +300,17 @@ export class World {
     this.map = options.map ?? generateRomania(options.seed);
     this.occupant = new Int32Array(this.map.width * this.map.height);
     this.rng = new Rng(options.seed);
+    this.haraciOn = options.haraci ?? !options.map;
     if (!options.map) this.setupRomania();
   }
 
-  /** Era 1 start: Ardeal holds court at Alba Iulia, Moldova at Iași. */
+  /** 1600: Alba Iulia, Iași, Târgoviște and — under the Porte's eye — Constanța. */
   private setupRomania(): void {
     const starts: readonly (readonly [FactionId, { x: number; y: number }])[] = [
       ['ardeal', placeTile(PLACES.albaIulia)],
       ['moldova', placeTile(PLACES.iasi)],
+      ['tara', placeTile(PLACES.targoviste)],
+      ['dobrogea', placeTile(PLACES.constanta)],
     ];
     for (const [faction, town] of starts) {
       const site = nearestTile(this.map, town.x - 1, town.y - 1, (_i, x, y) => this.canPlace('curte', x, y));
@@ -320,7 +385,21 @@ export class World {
         if (this.occupant[this.map.index(x, y)] !== 0) return false;
       }
     }
-    return true;
+    if (!BUILDINGS[kind].needsWater) return true;
+    // A fishery needs a shore: some water right next to the footprint.
+    for (let dy = -1; dy <= size; dy++) {
+      for (let dx = -1; dx <= size; dx++) {
+        if (!this.map.inBounds(tx + dx, ty + dy)) continue;
+        const t = this.map.terrainAt(tx + dx, ty + dy);
+        if (t === Terrain.Water || t === Terrain.Ford) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Factions that still have a court. */
+  alive(): FactionId[] {
+    return FACTION_IDS.filter((f) => this.buildings.some((b) => b.faction === f && b.kind === 'curte'));
   }
 
   /** Everyone who fights without being told to. */
@@ -358,7 +437,9 @@ export class World {
 
   /** Whether the faction's era knows how to build this at all. */
   canBuild(faction: FactionId, kind: BuildingKind): boolean {
-    return kind !== 'curte' && this.era[faction] >= BUILDINGS[kind].era;
+    const def = BUILDINGS[kind];
+    if (kind === 'curte' || (def.only && def.only !== faction)) return false;
+    return this.era[faction] >= def.era;
   }
 
   canAfford(faction: FactionId, kind: BuildingKind): boolean {
@@ -404,7 +485,7 @@ export class World {
   canBribe(faction: FactionId, building: Building): boolean {
     if (building.faction !== faction || this.era[faction] < BRIBE_ERA) return false;
     if (this.stock[faction].prune < BRIBE_PRUNE) return false;
-    return !building.done || building.queue.length > 0 || building.advanceLeft > 0;
+    return this.isBusy(building);
   }
 
   abilityReady(faction: FactionId): boolean {
@@ -478,6 +559,7 @@ export class World {
       drink: 0,
       stun: 0,
       scandalIn: kind === 'smecher' ? SCANDAL_MIN_GAP + this.rng.int(SCANDAL_GAP_SPREAD) : 0,
+      expires: 0,
     };
     this.units.push(unit);
     return unit;
@@ -534,13 +616,35 @@ export class World {
     }
     this.tick++;
     if (this.tick % FUNDS_EVERY === 0) {
+      // Once Țara Românească is in the present, the capital takes its cut.
+      const capital = this.era.tara >= LAST_ERA && this.courtOf('tara') ? this.stock.tara : null;
       for (const faction of FACTION_IDS) {
         if (this.era[faction] < LAST_ERA || !this.courtOf(faction)) continue;
-        this.stock[faction].lemn += FUNDS_AMOUNT;
-        this.stock[faction].prune += FUNDS_AMOUNT;
+        let amount = FUNDS_AMOUNT;
+        if (capital && faction !== 'tara') {
+          amount -= CAPITAL_TAX;
+          capital.lemn += CAPITAL_TAX;
+          capital.prune += CAPITAL_TAX;
+          this.events.push({ type: 'tax', faction });
+        }
+        this.stock[faction].lemn += amount;
+        this.stock[faction].prune += amount;
         this.events.push({ type: 'funds', faction });
       }
     }
+    if (this.tick % SUMMER_EVERY === 0 && this.era.dobrogea >= LAST_ERA && this.courtOf('dobrogea')) {
+      // Everybody comes to the seaside, pays, and leaves the place a little worse.
+      const visitors = this.alive().length - 1;
+      if (visitors > 0) {
+        this.stock.dobrogea.prune += SUMMER_FEE * visitors;
+        for (const b of this.buildings) {
+          if (b.faction !== 'dobrogea') continue;
+          b.hp = Math.max(1, b.hp - Math.floor((b.maxHp * SUMMER_WEAR_PERCENT) / 100));
+        }
+        this.events.push({ type: 'summer', visitors });
+      }
+    }
+    if (this.haraciOn) this.stepHaraci();
   }
 
   private ownUnits(faction: FactionId, ids: UnitIds): Unit[] {
@@ -591,6 +695,19 @@ export class World {
       case 'bribe':
         this.applyBribe(command.faction, command.buildingId);
         break;
+      case 'haraci': {
+        const owed = this.haraci[command.faction];
+        if (owed.due === 0) break;
+        if (!command.pay) {
+          owed.due = 0;
+          this.raid(command.faction);
+        } else if (this.stock[command.faction].prune >= owed.amount) {
+          this.stock[command.faction].prune -= owed.amount;
+          owed.due = 0;
+          this.events.push({ type: 'haraciPaid', faction: command.faction, amount: owed.amount });
+        }
+        break;
+      }
       case 'ability':
         this.applyAbility(command.faction, command.unitId);
         break;
@@ -636,18 +753,71 @@ export class World {
     this.stock[faction].prune -= BRIBE_PRUNE;
     // Sometimes the plums are taken and nothing moves. That is the era.
     const worked = this.rng.int(BRIBE_POCKETED_ONE_IN) !== 0;
-    if (worked) {
-      if (!building.done) {
-        building.buildLeft = 0;
-        building.done = true;
-        this.events.push({ type: 'built', buildingId: building.id });
-      } else if (building.advanceLeft > 0) {
-        building.advanceLeft = 1;
-      } else {
-        building.trainLeft = 1;
+    if (worked) this.hurry(building);
+    this.events.push({ type: 'bribe', faction, buildingId, worked });
+  }
+
+  /** Whether a building has something in progress. */
+  private isBusy(building: Building): boolean {
+    return !building.done || building.queue.length > 0 || building.advanceLeft > 0;
+  }
+
+  /** Finish whatever the building is in the middle of. */
+  private hurry(building: Building): void {
+    if (!building.done) {
+      building.buildLeft = 0;
+      building.done = true;
+      this.events.push({ type: 'built', buildingId: building.id });
+    } else if (building.advanceLeft > 0) {
+      building.advanceLeft = 1;
+    } else if (building.queue.length > 0) {
+      building.trainLeft = 1;
+    }
+  }
+
+  // --- The Porte ---------------------------------------------------------------
+
+  private stepHaraci(): void {
+    for (const faction of FACTION_IDS) {
+      const owed = this.haraci[faction];
+      if (owed.due > 0) {
+        owed.due--;
+        if (owed.due === 0) this.raid(faction);
       }
     }
-    this.events.push({ type: 'bribe', faction, buildingId, worked });
+    if (this.tick % HARACI_EVERY !== 0) return;
+    for (const faction of FACTION_IDS) {
+      const owed = this.haraci[faction];
+      // Dobrogea already belongs to the Porte, and nobody pays after independence.
+      if (!FACTIONS[faction].paysHaraci || this.era[faction] > HARACI_LAST_ERA) continue;
+      if (owed.due > 0 || !this.courtOf(faction)) continue;
+      owed.amount = HARACI_BASE + HARACI_STEP * owed.asked;
+      owed.asked++;
+      owed.due = HARACI_DEADLINE;
+      this.events.push({ type: 'haraci', faction, amount: owed.amount });
+    }
+  }
+
+  /** The tribute was not paid: janissaries come for the court, more each time. */
+  private raid(faction: FactionId): void {
+    const court = this.courtOf(faction);
+    if (!court) return;
+    const owed = this.haraci[faction];
+    const count = RAID_BASE + RAID_STEP * owed.refused;
+    owed.refused++;
+    const taken = new Set<number>();
+    for (const u of this.units) taken.add(this.tileOf(u));
+    for (let n = 0; n < count; n++) {
+      // They come up from the south, from the Danube.
+      const spot = nearestPassable(this.map, court.tx + 1, court.ty + 12, taken);
+      if (spot === -1) break;
+      taken.add(spot);
+      const sx = spot % this.map.width;
+      const raider = this.spawnUnit(RAIDERS, sx, (spot - sx) / this.map.width, 'ostas');
+      raider.expires = RAID_TICKS;
+      this.orderAttack(raider, court.id);
+    }
+    this.events.push({ type: 'raid', faction, count });
   }
 
   private applyAbility(faction: FactionId, unitId: number | undefined): void {
@@ -666,8 +836,32 @@ export class World {
       }
       for (const unit of own) unit.drink = DRINK_TICKS;
       this.buff[faction] = DRINK_TICKS + BUFF_TICKS;
-      this.events.push({ type: 'ability', faction, ability: 'palinca', unitId: own[0]?.id ?? 0 });
-    } else {
+      this.events.push({ type: 'ability', faction, ability: 'palinca', unitId: own[0]?.id ?? 0, count: own.length });
+    } else if (def.id === 'rezolva') {
+      // Everything in progress gets "sorted out" — or, one time in four, nothing does.
+      const busy = this.buildings.filter((b) => b.faction === faction && this.isBusy(b));
+      if (busy.length === 0) return;
+      const worked = this.rng.int(REZOLVA_FAILS_ONE_IN) !== 0;
+      if (worked) for (const b of busy) this.hurry(b);
+      else this.stock[faction].prune = Math.max(0, this.stock[faction].prune - REZOLVA_FAIL_PRUNE);
+      this.events.push({ type: 'ability', faction, ability: 'rezolva', unitId: 0, count: worked ? busy.length : 0 });
+    } else if (def.id === 'plaja') {
+      // Enemy soldiers near the court drop everything for the beach, and pay for the sunbed.
+      const court = this.courtOf(faction);
+      if (!court) return;
+      const cx = (court.tx * 2 + BUILDINGS.curte.size) * HALF;
+      const cy = (court.ty * 2 + BUILDINGS.curte.size) * HALF;
+      let tourists = 0;
+      for (const enemy of this.units) {
+        if (enemy.faction === faction || !isFighter(enemy.kind)) continue;
+        if (distSq(cx, cy, enemy.x, enemy.y) > BEACH_RADIUS * BEACH_RADIUS) continue;
+        enemy.stun = BEACH_STUN;
+        tourists++;
+      }
+      if (tourists === 0) return;
+      this.stock[faction].prune += BEACH_FEE * tourists;
+      this.events.push({ type: 'ability', faction, ability: 'plaja', unitId: 0, count: tourists });
+    } else if (def.id === 'taunt') {
       const taunter = unitId === undefined ? undefined : this.getUnit(unitId);
       if (!taunter || taunter.faction !== faction) return;
       for (const enemy of this.units) {
@@ -677,7 +871,9 @@ export class World {
         enemy.order = { type: 'attack', target, current: taunter.id, lock: TAUNT_TICKS, repath: 0 };
       }
       taunter.shield = TAUNT_TICKS;
-      this.events.push({ type: 'ability', faction, ability: 'taunt', unitId: taunter.id });
+      this.events.push({ type: 'ability', faction, ability: 'taunt', unitId: taunter.id, count: 1 });
+    } else {
+      return;
     }
 
     this.stock[faction].palinca -= def.costPalinca;
@@ -844,6 +1040,12 @@ export class World {
     unit.prevX = unit.x;
     unit.prevY = unit.y;
     if (unit.hp <= 0) return; // fell earlier this tick
+    if (unit.expires > 0 && --unit.expires === 0) {
+      // The raid is over: back to Stambul with whatever they got.
+      unit.expires = -1;
+      unit.hp = 0;
+      return;
+    }
     if (unit.cooldown > 0) unit.cooldown--;
     if (unit.shield > 0) unit.shield--;
     if (unit.drink > 0) {
@@ -926,13 +1128,14 @@ export class World {
    * Id of the closest enemy within `radius`: soldiers first, then any unit,
    * then buildings. 0 if there is nothing to fight.
    */
-  private nearestEnemy(unit: Unit, radius: number, unitsOnly = false): number {
+  private nearestEnemy(unit: Unit, radius: number, unitsOnly = false, fightersOnly = false): number {
     const limit = radius * radius;
     let best = 0;
     let bestD = 0;
     let bestRank = 3;
     for (const other of this.units) {
       if (other.faction === unit.faction || other.hp <= 0) continue;
+      if (fightersOnly && !isFighter(other.kind)) continue;
       const d = distSq(unit.x, unit.y, other.x, other.y);
       if (d > limit) continue;
       const rank = isFighter(other.kind) ? 0 : 1;
@@ -964,10 +1167,11 @@ export class World {
       order.current = order.target;
       current = this.resolve(order.target);
     }
-    // On the way to a building (or with nothing left to hit), enemy units come first.
+    // On the way to a building, defenders come first — but an army on a siege
+    // leaves the peasants alone. With nothing left to hit, anything will do.
     const scan = !current || (order.lock === 0 && current.building && (this.tick + unit.id) % 5 === 0);
     if (scan) {
-      const threat = this.nearestEnemy(unit, AGGRO_RADIUS, current !== undefined);
+      const threat = this.nearestEnemy(unit, AGGRO_RADIUS, current !== undefined, current !== undefined);
       if (threat !== 0) {
         order.current = threat;
         if (!current) order.target = threat;
@@ -1004,6 +1208,8 @@ export class World {
   private hit(attacker: Unit, target: Target): void {
     let damage = attacker.damage;
     if (this.buff[attacker.faction] > 0) damage = Math.floor((damage * 3) / 2);
+    const victim = (target.unit ?? target.building).faction;
+    if (FACTIONS[attacker.faction].rival === victim) damage = Math.floor((damage * RIVAL_DAMAGE_PERCENT) / 100);
     attacker.cooldown = attacker.attackCooldown;
     if (target.unit) {
       if (target.unit.shield > 0) damage = Math.max(1, damage >> 1);
@@ -1025,28 +1231,53 @@ export class World {
     for (let i = this.units.length - 1; i >= 0; i--) {
       const unit = this.units[i]!;
       if (unit.hp > 0) continue;
-      this.events.push({ type: 'died', unitId: unit.id, faction: unit.faction, x: unit.x, y: unit.y });
+      if (unit.expires === -1) this.events.push({ type: 'left', unitId: unit.id });
+      else this.events.push({ type: 'died', unitId: unit.id, faction: unit.faction, x: unit.x, y: unit.y });
       this.units.splice(i, 1);
     }
+    const fallen: FactionId[] = [];
     for (let i = this.buildings.length - 1; i >= 0; i--) {
       const building = this.buildings[i]!;
       if (building.hp > 0) continue;
-      const def = BUILDINGS[building.kind];
-      for (let dy = 0; dy < def.size; dy++) {
-        for (let dx = 0; dx < def.size; dx++) {
-          const t = this.map.index(building.tx + dx, building.ty + dy);
-          this.occupant[t] = 0;
-          this.map.blocked[t] = 0;
-        }
-      }
-      this.buildings.splice(i, 1);
-      this.events.push({ type: 'destroyed', buildingId: building.id, faction: building.faction });
+      this.removeBuilding(i);
       const courtLeft = this.buildings.some((b) => b.faction === building.faction && b.kind === 'curte');
-      if (building.kind === 'curte' && !courtLeft && this.winner === null) {
-        this.winner = enemyOf(building.faction);
+      if (building.kind === 'curte' && !courtLeft) fallen.push(building.faction);
+    }
+    for (const faction of fallen) {
+      // No court, no principality: its people go home and its buildings stand empty no more.
+      for (let i = this.units.length - 1; i >= 0; i--) {
+        const unit = this.units[i]!;
+        if (unit.faction !== faction) continue;
+        this.events.push({ type: 'left', unitId: unit.id });
+        this.units.splice(i, 1);
+      }
+      for (let i = this.buildings.length - 1; i >= 0; i--) {
+        if (this.buildings[i]!.faction === faction) this.removeBuilding(i);
+      }
+      this.haraci[faction].due = 0;
+      this.events.push({ type: 'eliminated', faction });
+    }
+    if (fallen.length > 0 && this.winner === null) {
+      const alive = this.alive();
+      if (alive.length === 1) {
+        this.winner = alive[0]!;
         this.events.push({ type: 'won', faction: this.winner });
       }
     }
+  }
+
+  private removeBuilding(index: number): void {
+    const building = this.buildings[index]!;
+    const def = BUILDINGS[building.kind];
+    for (let dy = 0; dy < def.size; dy++) {
+      for (let dx = 0; dx < def.size; dx++) {
+        const t = this.map.index(building.tx + dx, building.ty + dy);
+        this.occupant[t] = 0;
+        this.map.blocked[t] = 0;
+      }
+    }
+    this.buildings.splice(index, 1);
+    this.events.push({ type: 'destroyed', buildingId: building.id, faction: building.faction });
   }
 
   // --- Economy ----------------------------------------------------------------
@@ -1202,6 +1433,14 @@ export class World {
       }
     }
 
+    if (building.kind === 'cherhana') {
+      building.sawLeft--;
+      if (building.sawLeft <= 0) {
+        building.sawLeft = CHERHANA_TICKS;
+        stock.prune++;
+      }
+    }
+
     if (building.kind === 'gater') {
       building.sawLeft--;
       if (building.sawLeft <= 0) {
@@ -1235,6 +1474,17 @@ export class World {
     let budget = unit.speed;
     if (terrain === Terrain.Forest) budget = unit.speed >> 1;
     else if (terrain === Terrain.Ford) budget = Math.floor(unit.speed / 3);
+    if (FACTIONS[unit.faction].traffic && this.era[unit.faction] >= LAST_ERA) {
+      // The present, near the capital: everybody is stuck in it together.
+      const court = this.courtOf(unit.faction);
+      if (court) {
+        const cx = (court.tx * 2 + BUILDINGS.curte.size) * HALF;
+        const cy = (court.ty * 2 + BUILDINGS.curte.size) * HALF;
+        if (distSq(cx, cy, unit.x, unit.y) <= TRAFFIC_RADIUS * TRAFFIC_RADIUS) {
+          budget = Math.floor((budget * TRAFFIC_SPEED_PERCENT) / 100);
+        }
+      }
+    }
 
     while (budget > 0 && unit.path.length > 0) {
       const next = unit.path[unit.path.length - 1]!;
@@ -1264,9 +1514,10 @@ export class World {
     for (const faction of FACTION_IDS) {
       const s = this.stock[faction];
       values.push(s.lemn, s.prune, s.palinca, this.buff[faction], this.abilityCooldown[faction], this.era[faction]);
+      values.push(this.haraci[faction].due, this.haraci[faction].refused);
     }
     for (const u of this.units) {
-      values.push(u.id, u.x, u.y, u.hp, u.path.length, u.carryAmount, u.drink, u.stun, u.cooldown, ORDER_CODE[u.order.type]);
+      values.push(u.id, u.x, u.y, u.hp, u.path.length, u.carryAmount, u.drink, u.stun, u.cooldown, u.expires, ORDER_CODE[u.order.type]);
     }
     for (const b of this.buildings) {
       values.push(b.id, b.hp, b.buildLeft, b.done ? 1 : 0, b.queue.length, b.trainLeft, b.distillLeft, b.advanceLeft);
