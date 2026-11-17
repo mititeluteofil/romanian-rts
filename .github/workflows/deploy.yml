@@ -1,4 +1,4 @@
-name: CI & Deploy to Cloudflare Pages
+name: CI & Deploy to Cloudflare Workers
 
 on:
   push:
@@ -35,10 +35,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy to Cloudflare Pages
+      - name: Deploy to Cloudflare Workers
         if: github.event_name == 'push' && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != ''
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=${{ vars.CF_PAGES_PROJECT || 'romanian-rts' }} --branch=${{ github.ref_name }}
+          command: deploy
