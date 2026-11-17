@@ -23,6 +23,8 @@
         <div id="hud-right">
           <span id="hud-stock"></span>
           <div id="hud-controls">
+            <button type="button" id="btn-box" title="Selectare cu chenar (B)">Chenar</button>
+            <button type="button" id="btn-idle" title="Țăran liber (Tab / I)" disabled>Liberi: 0</button>
             <button type="button" id="btn-pause" title="Pauză (Space / P)">Pauză</button>
             <button type="button" id="btn-speed" title="Viteză joc">1×</button>
             <button type="button" id="btn-save" title="Salvează partida">Salvează</button>
@@ -57,6 +59,11 @@
           <input type="checkbox" id="menu-peace" />
           <span>Fără război: doar gospodărie, din 1600 până la mall.</span>
         </label>
+        <div id="menu-difficulty" role="group" aria-label="Dificultate">
+          <button type="button" data-difficulty="usor">Ușor</button>
+          <button type="button" data-difficulty="normal" class="active">Normal</button>
+          <button type="button" data-difficulty="greu">Greu</button>
+        </div>
         <div id="menu-factions"></div>
       </div>
     </div>

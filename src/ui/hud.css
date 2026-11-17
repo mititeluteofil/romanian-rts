@@ -109,6 +109,11 @@ body {
   opacity: 0.65;
 }
 
+#hud-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 #pause-banner {
   position: absolute;
   left: 50%;
@@ -409,4 +414,29 @@ body {
   height: 22px;
   flex: none;
   accent-color: var(--edge);
+}
+
+#menu-difficulty {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+
+#menu-difficulty button {
+  padding: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--ink);
+  background: #2c2f26;
+  border: 2px solid #6b6444;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#menu-difficulty button.active {
+  background: #7a5a16;
+  border-color: var(--edge);
+  color: #ffe082;
 }

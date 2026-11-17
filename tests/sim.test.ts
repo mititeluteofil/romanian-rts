@@ -1051,4 +1051,23 @@ describe('saves, crowd fan-out and voice hook', () => {
     expect(summary).toContain('Fără război');
     expect(loadGame()).toBeNull();
   });
+
+  it('supports AI difficulty presets and preserves them in snapshots', () => {
+    const easy = new SkirmishAi('moldova', { difficulty: 'usor' });
+    const hard = new SkirmishAi('moldova', { difficulty: 'greu' });
+    expect(SkirmishAi.fromSnapshot(easy.toSnapshot()).difficulty).toBe('usor');
+    expect(SkirmishAi.fromSnapshot(hard.toSnapshot()).difficulty).toBe('greu');
+
+    const playToFirstAttack = (diff: 'usor' | 'greu') => {
+      const world = new World({ seed: 1600 });
+      const ai = new SkirmishAi('moldova', { difficulty: diff });
+      for (let i = 0; i < 6000; i++) {
+        world.step();
+        if (world.tick % AI_THINK_EVERY === 0) ai.think(world);
+        if (ai.toSnapshot().wavesSent > 0) return world.tick;
+      }
+      return Infinity;
+    };
+    expect(playToFirstAttack('greu')).toBeLessThan(playToFirstAttack('usor'));
+  });
 });

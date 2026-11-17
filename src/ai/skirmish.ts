@@ -8,14 +8,32 @@ import { SUB, type Building, type Unit, type World } from '../sim/world';
 /** How often the AI looks at the board, in ticks. */
 export const AI_THINK_EVERY = 10;
 
-const WANTED_PEASANTS = 6;
+export type Difficulty = 'usor' | 'normal' | 'greu';
+
+export const DIFFICULTY_LABELS: Readonly<Record<Difficulty, string>> = {
+  usor: 'Ușor',
+  normal: 'Normal',
+  greu: 'Greu',
+};
+
+interface DifficultyTuning {
+  readonly thinkSkipMod: number;
+  readonly wantedPeasants: number;
+  readonly firstAttackTick: number;
+  readonly biggestWave: number;
+  readonly waveStep: number;
+}
+
+const DIFFICULTIES: Readonly<Record<Difficulty, DifficultyTuning>> = {
+  usor: { thinkSkipMod: 2, wantedPeasants: 5, firstAttackTick: 4200, biggestWave: 6, waveStep: 1 },
+  normal: { thinkSkipMod: 1, wantedPeasants: 6, firstAttackTick: 3000, biggestWave: 10, waveStep: 2 },
+  greu: { thinkSkipMod: 1, wantedPeasants: 7, firstAttackTick: 2400, biggestWave: 12, waveStep: 2 },
+};
+
 const WOOD_RESERVE = 100;
 const DEFEND_RADIUS = 9 * SUB;
 const FIRST_WAVE = 4;
 const HOME_GUARD = 2;
-const BIGGEST_WAVE = 10;
-/** No marching before this tick (5 minutes): time for the other side to settle in. */
-const FIRST_ATTACK_TICK = 3000;
 /** Keep this much of each resource in hand when paying for a new era. */
 const ERA_RESERVE = 25;
 const WANTED_SMECHERI = 2;
@@ -24,11 +42,13 @@ const BEACH_RADIUS = 8 * SUB;
 export interface AiOptions {
   /** false = a quiet neighbour: builds, defends its court, never marches. */
   readonly attacks?: boolean;
+  readonly difficulty?: Difficulty;
 }
 
 export interface AiSnapshot {
   readonly faction: FactionId;
   readonly attacks: boolean;
+  readonly difficulty?: Difficulty;
   readonly waveSize: number;
   readonly wavesSent: number;
 }
@@ -52,31 +72,42 @@ export class SkirmishAi {
   private waveSize = FIRST_WAVE;
   private wavesSent = 0;
   private readonly attacks: boolean;
+  readonly difficulty: Difficulty;
+  private readonly tuning: DifficultyTuning;
 
   constructor(
     readonly faction: FactionId,
     options: AiOptions = {},
   ) {
     this.attacks = options.attacks ?? true;
+    this.difficulty = options.difficulty ?? 'normal';
+    this.tuning = DIFFICULTIES[this.difficulty];
   }
 
   toSnapshot(): AiSnapshot {
     return {
       faction: this.faction,
       attacks: this.attacks,
+      difficulty: this.difficulty,
       waveSize: this.waveSize,
       wavesSent: this.wavesSent,
     };
   }
 
   static fromSnapshot(snap: AiSnapshot): SkirmishAi {
-    const ai = new SkirmishAi(snap.faction, { attacks: snap.attacks });
+    const ai = new SkirmishAi(snap.faction, {
+      attacks: snap.attacks,
+      difficulty: snap.difficulty ?? 'normal',
+    });
     ai.waveSize = snap.waveSize;
     ai.wavesSent = snap.wavesSent;
     return ai;
   }
 
   think(world: World): void {
+    if (this.tuning.thinkSkipMod > 1 && Math.floor(world.tick / AI_THINK_EVERY) % this.tuning.thinkSkipMod !== 0) {
+      return;
+    }
     const faction = this.faction;
     const court = world.courtOf(faction);
     if (!court || world.winner !== null) return;
@@ -108,7 +139,7 @@ export class SkirmishAi {
     const nursery = buildings.find((b) => b.done && world.trainable(b).includes('taran'));
     if (nursery) {
       const coming = nursery.queue.filter((k) => k === 'taran').length;
-      if (peasants.length + coming < WANTED_PEASANTS && world.canTrain(faction, nursery, 'taran')) {
+      if (peasants.length + coming < this.tuning.wantedPeasants && world.canTrain(faction, nursery, 'taran')) {
         world.issue({ type: 'train', faction, buildingId: nursery.id, kind: 'taran' });
       }
     }
@@ -181,32 +212,48 @@ export class SkirmishAi {
 
   private putPeasantsToWork(world: World, court: Building, peasants: Unit[], buildings: Building[]): void {
     const faction = this.faction;
-    const idle = peasants.filter((u) => u.order.type === 'idle');
-    if (idle.length === 0) return;
-
-    const orchards = buildings.filter((b) => b.kind === 'livada' && b.done);
-    const free = new Map<number, number>();
-    for (const o of orchards) free.set(o.id, ORCHARD_CAPACITY - world.orchardWorkers(o.id));
     let onWood = peasants.filter((u) => u.order.type === 'gather' && u.order.resource === 'lemn').length;
     const hasFishery = buildings.some((b) => b.kind === 'cherhana' && b.done);
     const wantedOnWood =
       hasFishery && world.stock[faction].prune >= 150 ? 4 : world.stock[faction].lemn < WOOD_RESERVE ? 3 : 2;
 
-    for (const unit of idle) {
-      const orchard = orchards.find((o) => (free.get(o.id) ?? 0) > 0);
-      if (orchard && onWood >= wantedOnWood) {
-        free.set(orchard.id, (free.get(orchard.id) ?? 0) - 1);
-        world.issue({ type: 'act', faction, unitIds: [unit.id], tx: orchard.tx, ty: orchard.ty });
-        continue;
+    const idle = peasants.filter((u) => u.order.type === 'idle');
+    if (idle.length > 0) {
+      const orchards = buildings.filter((b) => b.kind === 'livada' && b.done);
+      const free = new Map<number, number>();
+      for (const o of orchards) free.set(o.id, ORCHARD_CAPACITY - world.orchardWorkers(o.id));
+
+      for (const unit of idle) {
+        const orchard = orchards.find((o) => (free.get(o.id) ?? 0) > 0);
+        if (orchard && onWood >= wantedOnWood) {
+          free.set(orchard.id, (free.get(orchard.id) ?? 0) - 1);
+          world.issue({ type: 'act', faction, unitIds: [unit.id], tx: orchard.tx, ty: orchard.ty });
+          continue;
+        }
+        const forest = this.forestByFoot(world, court);
+        if (forest !== -1) {
+          const fx = forest % world.map.width;
+          world.issue({ type: 'act', faction, unitIds: [unit.id], tx: fx, ty: (forest - fx) / world.map.width });
+          onWood++;
+        } else if (orchard) {
+          free.set(orchard.id, (free.get(orchard.id) ?? 0) - 1);
+          world.issue({ type: 'act', faction, unitIds: [unit.id], tx: orchard.tx, ty: orchard.ty });
+        }
       }
-      const forest = this.forestByFoot(world, court);
-      if (forest !== -1) {
+    }
+
+    // With a fishery keeping food full, pull spare orchard pickers onto wood.
+    if (hasFishery && world.stock[faction].prune >= 200 && onWood < wantedOnWood) {
+      const pickers = peasants.filter(
+        (u) => u.order.type === 'gather' && u.order.resource === 'prune' && u.order.phase !== 'returning',
+      );
+      for (const picker of pickers) {
+        if (onWood >= wantedOnWood) break;
+        const forest = this.forestByFoot(world, court);
+        if (forest === -1) break;
         const fx = forest % world.map.width;
-        world.issue({ type: 'act', faction, unitIds: [unit.id], tx: fx, ty: (forest - fx) / world.map.width });
+        world.issue({ type: 'act', faction, unitIds: [picker.id], tx: fx, ty: (forest - fx) / world.map.width });
         onWood++;
-      } else if (orchard) {
-        free.set(orchard.id, (free.get(orchard.id) ?? 0) - 1);
-        world.issue({ type: 'act', faction, unitIds: [unit.id], tx: orchard.tx, ty: orchard.ty });
       }
     }
   }
@@ -253,7 +300,7 @@ export class SkirmishAi {
     const faction = this.faction;
     const prune = world.stock[faction].prune;
     // Don't starve the economy: peasants come first until there are enough.
-    const reserve = peasants.length < WANTED_PEASANTS ? world.unitCost(faction, 'taran').prune : 0;
+    const reserve = peasants.length < this.tuning.wantedPeasants ? world.unitCost(faction, 'taran').prune : 0;
 
     const mall = buildings.find((b) => b.kind === 'mall' && b.done);
     const smecheri = soldiers.filter((u) => u.kind === 'smecher').length;
@@ -303,11 +350,11 @@ export class SkirmishAi {
 
     // Otherwise gather a wave at home, then march on the enemy court.
     const waiting = soldiers.filter((u) => u.order.type === 'idle');
-    if (!this.attacks || world.tick < FIRST_ATTACK_TICK || waiting.length < this.waveSize) return;
+    if (!this.attacks || world.tick < this.tuning.firstAttackTick || waiting.length < this.waveSize) return;
     const enemyCourt = this.pickTarget(world, cx, cy);
     if (enemyCourt) {
       world.issue({ type: 'attack', faction, unitIds: waiting.slice(0, this.waveSize).map((u) => u.id), targetId: enemyCourt.id });
-      this.waveSize = Math.min(BIGGEST_WAVE, this.waveSize + 2);
+      this.waveSize = Math.min(this.tuning.biggestWave, this.waveSize + this.tuning.waveStep);
       this.wavesSent++;
     }
   }

@@ -16,6 +16,8 @@ export interface ActionButton {
 
 export interface HudCallbacks {
   readonly onAction: (id: string) => void;
+  readonly onBoxSelect: () => void;
+  readonly onIdlePeasant: () => void;
   readonly onPause: () => void;
   readonly onSpeed: () => void;
   readonly onSave: () => void;
@@ -44,6 +46,8 @@ export class Hud {
   private readonly actions = byId<HTMLDivElement>('actions');
   private readonly debug = byId<HTMLDivElement>('debug');
   private readonly bubbleLayer = byId<HTMLDivElement>('bubbles');
+  private readonly boxBtn = byId<HTMLButtonElement>('btn-box');
+  private readonly idleBtn = byId<HTMLButtonElement>('btn-idle');
   private readonly pauseBtn = byId<HTMLButtonElement>('btn-pause');
   private readonly speedBtn = byId<HTMLButtonElement>('btn-speed');
   private readonly saveBtn = byId<HTMLButtonElement>('btn-save');
@@ -66,6 +70,8 @@ export class Hud {
       },
       { signal },
     );
+    this.boxBtn.addEventListener('click', () => callbacks.onBoxSelect(), { signal });
+    this.idleBtn.addEventListener('click', () => callbacks.onIdlePeasant(), { signal });
     this.pauseBtn.addEventListener('click', () => callbacks.onPause(), { signal });
     this.resumeBtn.addEventListener('click', () => callbacks.onPause(), { signal });
     this.speedBtn.addEventListener('click', () => callbacks.onSpeed(), { signal });
@@ -105,6 +111,15 @@ export class Hud {
 
   setDebug(text: string): void {
     Hud.set(this.debug, text);
+  }
+
+  setBoxSelect(active: boolean): void {
+    this.boxBtn.classList.toggle('active', active);
+  }
+
+  setIdleCount(count: number): void {
+    Hud.set(this.idleBtn, `Liberi: ${count}`);
+    this.idleBtn.disabled = count === 0;
   }
 
   setPaused(paused: boolean): void {

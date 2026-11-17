@@ -10,9 +10,17 @@ interface ActivePointer {
   y: number;
 }
 
+export interface WorldRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 /**
- * One input scheme for touch and mouse:
- *   drag = pan, pinch / wheel = zoom, short tap = `onTap(worldX, worldY)`.
+ * Input scheme for touch and mouse:
+ *   touch: drag = pan, pinch = zoom, tap = `onTap`, or toggle `boxSelectMode` for 1-finger box select.
+ *   mouse: left-drag = box select (`Shift` adds), right/middle/Alt-drag = pan, wheel = zoom, click = `onTap`.
  * Arrow keys and WASD also pan on desktop.
  */
 export class CameraControls {
@@ -21,9 +29,14 @@ export class CameraControls {
   private readonly keys: Record<string, Phaser.Input.Keyboard.Key> | undefined;
   private startX = 0;
   private startY = 0;
+  private curX = 0;
+  private curY = 0;
   private startTime = 0;
   private dragging = false;
   private multiTouch = false;
+  private boxDrag = false;
+  private boxAdditive = false;
+  private boxSelectMode = false;
   private pinchDistance = 0;
   /** World point at the middle of the view; kept stable when the window resizes. */
   private centerX = 0;
@@ -36,6 +49,8 @@ export class CameraControls {
     private readonly worldWidth: number,
     private readonly worldHeight: number,
     private readonly onTap: (worldX: number, worldY: number) => void,
+    private readonly onBoxSelect?: (rect: WorldRect, additive: boolean) => void,
+    private readonly onBoxModeChange?: (active: boolean) => void,
   ) {
     this.cam = scene.cameras.main;
     const input = scene.input;
@@ -141,23 +156,56 @@ export class CameraControls {
     this.centerOn(this.centerX, this.centerY);
   }
 
+  get isBoxSelectMode(): boolean {
+    return this.boxSelectMode;
+  }
+
+  setBoxSelectMode(active: boolean): void {
+    if (this.boxSelectMode === active) return;
+    this.boxSelectMode = active;
+    this.onBoxModeChange?.(active);
+  }
+
+  /** Live world-space selection rectangle while dragging a box, or null. */
+  selectionBox(): WorldRect | null {
+    if (!this.dragging || !this.boxDrag || this.multiTouch) return null;
+    return this.worldRectFromScreen(this.startX, this.startY, this.curX, this.curY);
+  }
+
+  private worldRectFromScreen(ax: number, ay: number, bx: number, by: number): WorldRect {
+    const a = this.screenToWorld(ax, ay);
+    const b = this.screenToWorld(bx, by);
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    return { x, y, width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+  }
+
   private reset(): void {
     this.active.clear();
     this.dragging = false;
     this.multiTouch = false;
+    this.boxDrag = false;
   }
 
   private onDown(pointer: Phaser.Input.Pointer): void {
     this.touched = true;
     this.active.set(pointer.id, { x: pointer.x, y: pointer.y });
     if (this.active.size === 1) {
+      const ev = pointer.event as MouseEvent | PointerEvent | undefined;
+      const button = ev?.button ?? 0;
+      const isMouse = !pointer.wasTouch;
       this.startX = pointer.x;
       this.startY = pointer.y;
+      this.curX = pointer.x;
+      this.curY = pointer.y;
       this.startTime = this.scene.time.now;
       this.dragging = false;
       this.multiTouch = false;
+      this.boxDrag = isMouse ? button === 0 && !ev?.altKey : this.boxSelectMode;
+      this.boxAdditive = Boolean(ev?.shiftKey);
     } else {
       this.multiTouch = true;
+      this.boxDrag = false;
       this.pinchDistance = this.currentPinchDistance();
     }
   }
@@ -189,6 +237,11 @@ export class CameraControls {
       if (moved < DRAG_THRESHOLD_PX) return;
       this.dragging = true;
     }
+    if (this.boxDrag) {
+      this.curX = pointer.x;
+      this.curY = pointer.y;
+      return;
+    }
     this.cam.scrollX -= dx / this.cam.zoom;
     this.cam.scrollY -= dy / this.cam.zoom;
     this.clamp();
@@ -198,17 +251,24 @@ export class CameraControls {
     if (!this.active.has(pointer.id)) return;
     const wasOnlyPointer = this.active.size === 1;
     this.active.delete(pointer.id);
+    const ev = pointer.event as MouseEvent | PointerEvent | undefined;
+    const isPrimary = pointer.wasTouch || (ev?.button ?? 0) === 0;
     const quick = this.scene.time.now - this.startTime <= TAP_MAX_MS;
-    if (wasOnlyPointer && !this.dragging && !this.multiTouch && quick) {
+    if (wasOnlyPointer && !this.dragging && !this.multiTouch && quick && isPrimary) {
       const world = this.screenToWorld(pointer.x, pointer.y);
       this.onTap(world.x, world.y);
+    } else if (wasOnlyPointer && this.dragging && this.boxDrag && !this.multiTouch) {
+      this.onBoxSelect?.(this.worldRectFromScreen(this.startX, this.startY, pointer.x, pointer.y), this.boxAdditive);
+      if (this.boxSelectMode) this.setBoxSelectMode(false);
     }
     if (this.active.size === 0) {
       this.dragging = false;
       this.multiTouch = false;
+      this.boxDrag = false;
     } else {
       // Lifting one of two fingers must not turn the other into a tap or a jump.
       this.dragging = true;
+      this.boxDrag = false;
     }
   }
 

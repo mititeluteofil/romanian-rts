@@ -1,18 +1,19 @@
 import Phaser from 'phaser';
-import { AI_THINK_EVERY, SkirmishAi } from '../ai/skirmish';
+import { AI_THINK_EVERY, SkirmishAi, type Difficulty } from '../ai/skirmish';
 import { SoundEngine, type VoiceLineHook } from '../audio/sound';
 import { BUILD_MENU, BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
 import { BRIBE_ERA, COURT_NAMES, ERAS, LAST_ERA } from '../data/eras';
 import {
   FACTION_IDS,
   FACTIONS,
+  isFighter,
   SMECHER_LINES,
   type FactionId,
   type LineKind,
   type UnitKind,
 } from '../data/factions';
 import { REGION_NAMES } from '../data/romania';
-import { CameraControls } from '../input/CameraControls';
+import { CameraControls, type WorldRect } from '../input/CameraControls';
 import { clearSave, saveGame, type SaveGame } from '../save';
 import { nearestTile } from '../sim/pathfinding';
 import { hash2 } from '../sim/rng';
@@ -58,6 +59,7 @@ export interface GameOptions {
   readonly player: FactionId;
   /** Quiet neighbour: no war, the goal is to reach the present and open a mall. */
   readonly peaceful: boolean;
+  readonly difficulty?: Difficulty;
   /** Optional saved game to resume instead of starting from 1600. */
   readonly save?: SaveGame;
   readonly sound?: SoundEngine;
@@ -85,6 +87,7 @@ function pick<T>(items: readonly T[]): T {
 export class GameScene extends Phaser.Scene {
   private readonly player: FactionId;
   private readonly peaceful: boolean;
+  private readonly difficulty: Difficulty;
   /** What the food is called here, in lower case: "prune", "perje", "pește". */
   private readonly food: string;
   /** Whether pălincă is of any use to the player's faction. */
@@ -106,7 +109,9 @@ export class GameScene extends Phaser.Scene {
   private readonly unitSprites = new Map<number, Phaser.GameObjects.Image>();
   private readonly buildingSprites = new Map<number, Phaser.GameObjects.Image>();
   private readonly selectedUnits = new Set<number>();
+  private readonly controlGroups = new Map<number, number[]>();
   private selectedBuilding: number | null = null;
+  private idleCursor = 0;
   private placing: Placement | null = null;
   /** Whether the action bar is showing the list of things to build. */
   private buildMenuOpen = false;
@@ -128,6 +133,7 @@ export class GameScene extends Phaser.Scene {
     super('game');
     this.player = options.player;
     this.peaceful = options.peaceful;
+    this.difficulty = options.save?.difficulty ?? options.difficulty ?? 'normal';
     this.initialSave = options.save;
     this.sfx = options.sound ?? new SoundEngine();
     this.onReturnToMenu = options.onReturnToMenu;
@@ -150,7 +156,7 @@ export class GameScene extends Phaser.Scene {
     } else {
       this.world = new World({ seed: 1600 });
       this.ais = FACTION_IDS.filter((f) => f !== this.player).map(
-        (f) => new SkirmishAi(f, { attacks: !this.peaceful }),
+        (f) => new SkirmishAi(f, { attacks: !this.peaceful, difficulty: this.difficulty }),
       );
     }
 
@@ -161,6 +167,14 @@ export class GameScene extends Phaser.Scene {
       onAction: (id) => {
         this.sfx.unlock();
         this.handleAction(id);
+      },
+      onBoxSelect: () => {
+        this.sfx.unlock();
+        this.toggleBoxSelect();
+      },
+      onIdlePeasant: () => {
+        this.sfx.unlock();
+        this.cycleIdlePeasant();
       },
       onPause: () => {
         this.sfx.unlock();
@@ -225,10 +239,21 @@ export class GameScene extends Phaser.Scene {
     this.ghost = this.add.image(0, 0, `livada-${this.player}`).setOrigin(0, 0).setDepth(99).setVisible(false);
 
     // Camera and minimap
-    this.controls = new CameraControls(this, map.width * TILE, map.height * TILE, (x, y) => {
-      this.sfx.unlock();
-      this.handleTap(x, y);
-    });
+    this.controls = new CameraControls(
+      this,
+      map.width * TILE,
+      map.height * TILE,
+      (x, y) => {
+        this.sfx.unlock();
+        this.handleTap(x, y);
+      },
+      (rect, additive) => {
+        this.sfx.unlock();
+        this.handleBoxSelect(rect, additive);
+      },
+      (active) => this.hud.setBoxSelect(active),
+    );
+    this.hud.setBoxSelect(false);
     if (save) {
       this.controls.setZoom(save.camera.zoom);
       this.controls.jumpTo(save.camera.x, save.camera.y);
@@ -253,6 +278,18 @@ export class GameScene extends Phaser.Scene {
           e.preventDefault();
           this.sfx.unlock();
           this.togglePause();
+        } else if (e.code === 'KeyB') {
+          e.preventDefault();
+          this.sfx.unlock();
+          this.toggleBoxSelect();
+        } else if (e.code === 'Tab' || e.code === 'KeyI') {
+          e.preventDefault();
+          this.sfx.unlock();
+          this.cycleIdlePeasant();
+        } else if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
+          const group = Number(e.code.slice(5));
+          this.sfx.unlock();
+          this.handleControlGroup(group, e.ctrlKey || e.metaKey || e.shiftKey);
         }
       },
       { signal: sig },
@@ -297,6 +334,45 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private toggleBoxSelect(): void {
+    this.controls.setBoxSelectMode(!this.controls.isBoxSelectMode);
+  }
+
+  private cycleIdlePeasant(): void {
+    if (this.world.winner !== null || this.lost) return;
+    const idle = this.world.units
+      .filter((u) => u.faction === this.player && u.kind === 'taran' && u.order.type === 'idle')
+      .sort((a, b) => a.id - b.id);
+    if (idle.length === 0) return;
+    const next = idle[this.idleCursor % idle.length]!;
+    this.idleCursor = (this.idleCursor + 1) % idle.length;
+    this.selectedUnits.clear();
+    this.selectedBuilding = null;
+    this.buildMenuOpen = false;
+    this.selectedUnits.add(next.id);
+    this.controls.jumpTo(next.x * SUB_TO_PX, next.y * SUB_TO_PX);
+    this.sfx.play('select');
+    this.speak(next, 'select', this.time.now);
+  }
+
+  private handleControlGroup(slot: number, assign: boolean): void {
+    if (assign) {
+      const ids = [...this.selectedUnits];
+      if (ids.length > 0) {
+        this.controlGroups.set(slot, ids);
+        this.hud.toast(`Grupul ${slot}: ${ids.length} ${ids.length === 1 ? 'om' : 'oameni'}.`, this.time.now, 1500);
+      }
+      return;
+    }
+    const ids = (this.controlGroups.get(slot) ?? []).filter((id) => this.world.getUnit(id)?.faction === this.player);
+    if (ids.length === 0) return;
+    this.selectedUnits.clear();
+    this.selectedBuilding = null;
+    this.buildMenuOpen = false;
+    for (const id of ids) this.selectedUnits.add(id);
+    this.sfx.play('select');
+  }
+
   private togglePause(): void {
     this.paused = !this.paused;
     this.hud.setPaused(this.paused);
@@ -314,6 +390,7 @@ export class GameScene extends Phaser.Scene {
       savedAt: Date.now(),
       player: this.player,
       peaceful: this.peaceful,
+      difficulty: this.difficulty,
       goalReached: this.goalReached,
       lost: this.lost,
       taxed: this.taxed,
@@ -367,6 +444,7 @@ export class GameScene extends Phaser.Scene {
     for (const unit of this.world.units) this.drawUnit(unit, alpha, time);
     this.drawSparks(time);
     this.drawPlacement();
+    this.drawSelectionBox();
 
     this.refreshHud(time);
     if (this.frame++ % 4 === 0) {
@@ -720,12 +798,25 @@ export class GameScene extends Phaser.Scene {
     this.top.strokeRect(placing.tx * TILE, placing.ty * TILE, side, side);
   }
 
+  private drawSelectionBox(): void {
+    const box = this.controls.selectionBox();
+    if (!box) return;
+    this.top.fillStyle(0xfff176, 0.16);
+    this.top.fillRect(box.x, box.y, box.width, box.height);
+    this.top.lineStyle(Math.max(0.5, 1 / this.controls.zoom), 0xfff176, 0.95);
+    this.top.strokeRect(box.x, box.y, box.width, box.height);
+  }
+
   // --- HUD ----------------------------------------------------------------------
 
   private refreshHud(time: number): void {
     const world = this.world;
     const player = this.player;
     const stock = world.stock[player];
+    const idleCount = world.units.filter(
+      (u) => u.faction === player && u.kind === 'taran' && u.order.type === 'idle',
+    ).length;
+    this.hud.setIdleCount(idleCount);
     const view = this.controls.viewRect();
     const region = world.map.regionAt(
       Math.floor((view.x + view.width / 2) / TILE),
@@ -853,7 +944,9 @@ export class GameScene extends Phaser.Scene {
       ];
     }
     const units = this.selected();
-    const hasPeasant = units.some((u) => u.kind === 'taran');
+    const peasantsSelected = units.filter((u) => u.kind === 'taran').length;
+    const fightersSelected = units.length - peasantsSelected;
+    const hasPeasant = peasantsSelected > 0;
     if (this.buildMenuOpen && hasPeasant) {
       const list: ActionButton[] = [];
       for (const kind of BUILD_MENU) {
@@ -927,11 +1020,47 @@ export class GameScene extends Phaser.Scene {
         wait > 0 ? `gata în ${wait} s` : ability.costPalinca > 0 ? `${ability.costPalinca} pălinci` : 'gata';
       buttons.push({ id: 'ability', label: ability.name, detail, enabled: world.abilityReady(player) });
     }
+    if (units.length === 0 && !building && hasFighter) {
+      buttons.push({
+        id: 'select:fighters',
+        label: 'Alege oștenii',
+        detail: `${world.fighterCount(player)}`,
+        enabled: true,
+      });
+    }
+    if (peasantsSelected > 0 && fightersSelected > 0) {
+      buttons.push({ id: 'filter:taran', label: 'Doar țărani', detail: `${peasantsSelected}`, enabled: true });
+      buttons.push({ id: 'filter:fighters', label: 'Doar oșteni', detail: `${fightersSelected}`, enabled: true });
+    }
     if (units.length > 0) buttons.push({ id: 'deselect', label: 'Lasă-i în pace', enabled: true });
     return buttons;
   }
 
   // --- Input --------------------------------------------------------------------
+
+  private handleBoxSelect(rect: WorldRect, additive: boolean): void {
+    if (this.world.winner !== null || this.lost || this.placing) return;
+    const pad = 6;
+    const minX = rect.x - pad;
+    const minY = rect.y - pad;
+    const maxX = rect.x + rect.width + pad;
+    const maxY = rect.y + rect.height + pad;
+    const caught: Unit[] = [];
+    for (const unit of this.world.units) {
+      if (unit.faction !== this.player) continue;
+      const px = unit.x * SUB_TO_PX;
+      const py = unit.y * SUB_TO_PX;
+      if (px >= minX && px <= maxX && py >= minY && py <= maxY) caught.push(unit);
+    }
+    if (!additive) this.selectedUnits.clear();
+    if (caught.length === 0) return;
+    this.selectedBuilding = null;
+    this.buildMenuOpen = false;
+    for (const unit of caught) this.selectedUnits.add(unit.id);
+    this.sfx.play('select');
+    this.speak(caught[0], 'select', this.time.now);
+    this.hud.hideToast();
+  }
 
   private handleAction(id: string): void {
     const player = this.player;
@@ -939,6 +1068,22 @@ export class GameScene extends Phaser.Scene {
     if (id === 'restart') {
       clearSave();
       location.reload();
+    } else if (id === 'select:fighters') {
+      this.selectedUnits.clear();
+      this.selectedBuilding = null;
+      this.buildMenuOpen = false;
+      for (const u of this.world.units) {
+        if (u.faction === player && isFighter(u.kind)) this.selectedUnits.add(u.id);
+      }
+      this.sfx.play('select');
+    } else if (id === 'filter:taran' || id === 'filter:fighters') {
+      const wantPeasant = id === 'filter:taran';
+      for (const uid of [...this.selectedUnits]) {
+        const u = this.world.getUnit(uid);
+        if (!u || (u.kind === 'taran') !== wantPeasant) this.selectedUnits.delete(uid);
+      }
+      if (!wantPeasant) this.buildMenuOpen = false;
+      this.sfx.play('select');
     } else if (id === 'menu:build') {
       this.buildMenuOpen = true;
     } else if (id === 'menu:back') {

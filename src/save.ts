@@ -1,4 +1,4 @@
-import type { AiSnapshot } from './ai/skirmish';
+import { DIFFICULTY_LABELS, type AiSnapshot, type Difficulty } from './ai/skirmish';
 import { ERAS } from './data/eras';
 import { FACTION_IDS, FACTIONS, type FactionId } from './data/factions';
 import { TICK_RATE, type WorldSnapshot } from './sim/world';
@@ -10,6 +10,7 @@ export interface SaveGame {
   readonly savedAt: number;
   readonly player: FactionId;
   readonly peaceful: boolean;
+  readonly difficulty?: Difficulty;
   readonly goalReached: boolean;
   readonly lost: boolean;
   readonly taxed: boolean;
@@ -65,6 +66,6 @@ export function formatSaveSummary(save: SaveGame): string {
   const mins = Math.floor(save.world.tick / TICK_RATE / 60);
   const secs = Math.floor(save.world.tick / TICK_RATE) % 60;
   const time = mins > 0 ? `${mins}m ${secs.toString().padStart(2, '0')}s` : `${secs}s`;
-  const mode = save.peaceful ? ' · Fără război' : '';
+  const mode = save.peaceful ? ' · Fără război' : ` · ${DIFFICULTY_LABELS[save.difficulty ?? 'normal']}`;
   return `${faction} · ${era.name} (${era.year})${mode} · ${time}`;
 }

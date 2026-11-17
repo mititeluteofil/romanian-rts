@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import type { Difficulty } from './ai/skirmish';
 import { SoundEngine } from './audio/sound';
 import { FACTION_IDS, FACTIONS, type FactionId } from './data/factions';
 import { GameScene } from './render/GameScene';
@@ -7,8 +8,9 @@ import './ui/hud.css';
 
 const sound = new SoundEngine();
 let activeGame: Phaser.Game | null = null;
+let selectedDifficulty: Difficulty = 'normal';
 
-function launch(options: { player: FactionId; peaceful: boolean; save?: SaveGame }): void {
+function launch(options: { player: FactionId; peaceful: boolean; difficulty?: Difficulty; save?: SaveGame }): void {
   sound.unlock();
   document.getElementById('menu')?.classList.add('hidden');
   activeGame?.destroy(true);
@@ -41,8 +43,29 @@ function launch(options: { player: FactionId; peaceful: boolean; save?: SaveGame
   });
 }
 
+function wireDifficultyButtons(): void {
+  const group = document.getElementById('menu-difficulty');
+  if (!group) return;
+  const buttons = group.querySelectorAll<HTMLButtonElement>('button[data-difficulty]');
+  const sync = () => {
+    buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.difficulty === selectedDifficulty));
+  };
+  sync();
+  if (group.dataset.wired) return;
+  group.dataset.wired = '1';
+  group.addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-difficulty]');
+    const diff = btn?.dataset.difficulty as Difficulty | undefined;
+    if (!diff) return;
+    selectedDifficulty = diff;
+    sync();
+  });
+}
+
 /** Faction picker (plus Continue if a saved match exists). */
 function showMenu(): void {
+  wireDifficultyButtons();
+
   const cont = document.getElementById('menu-continue');
   const saved = loadGame();
   if (cont) {
@@ -82,14 +105,24 @@ function showMenu(): void {
     add('strong', faction.name);
     add('em', faction.motto);
     add('span', `${faction.ability.name}: ${faction.ability.description}`);
-    button.addEventListener('click', () => launch({ player: id, peaceful: peace?.checked ?? false }));
+    button.addEventListener('click', () =>
+      launch({ player: id, peaceful: peace?.checked ?? false, difficulty: selectedDifficulty }),
+    );
     list.appendChild(button);
   }
+}
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
 }
 
 // "?faction=moldova" skips the menu and "&peace=1" keeps the neighbour quiet
 // (handy while developing).
 const params = new URLSearchParams(location.search);
 const preset = FACTION_IDS.find((id) => id === params.get('faction'));
-if (preset) launch({ player: preset, peaceful: params.get('peace') === '1' });
+const diffParam = params.get('difficulty');
+const diff: Difficulty = diffParam === 'usor' || diffParam === 'greu' ? diffParam : 'normal';
+if (preset) launch({ player: preset, peaceful: params.get('peace') === '1', difficulty: diff });
 else showMenu();
