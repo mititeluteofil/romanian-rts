@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { AI_THINK_EVERY, SkirmishAi } from '../ai/skirmish';
+import { SoundEngine, type VoiceLineHook } from '../audio/sound';
 import { BUILD_MENU, BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
 import { BRIBE_ERA, COURT_NAMES, ERAS, LAST_ERA } from '../data/eras';
 import {
@@ -12,6 +13,7 @@ import {
 } from '../data/factions';
 import { REGION_NAMES } from '../data/romania';
 import { CameraControls } from '../input/CameraControls';
+import { clearSave, saveGame, type SaveGame } from '../save';
 import { nearestTile } from '../sim/pathfinding';
 import { hash2 } from '../sim/rng';
 import {
@@ -44,6 +46,8 @@ const MARKER_MS = 700;
 const SPARK_MS = 160;
 /** Never simulate more than this much catch-up after a pause (tab hidden). */
 const MAX_FRAME_MS = 250;
+const AUTOSAVE_TICKS = 150;
+const SPEEDS = [1, 2, 4] as const;
 const CARRY_COLORS = { lemn: 0x8a5a2b, prune: 0x6a3fa0 } as const;
 const OWN_HP = 0x7ee081;
 const ENEMY_HP = 0xe05a4a;
@@ -54,6 +58,10 @@ export interface GameOptions {
   readonly player: FactionId;
   /** Quiet neighbour: no war, the goal is to reach the present and open a mall. */
   readonly peaceful: boolean;
+  /** Optional saved game to resume instead of starting from 1600. */
+  readonly save?: SaveGame;
+  readonly sound?: SoundEngine;
+  readonly onReturnToMenu?: () => void;
 }
 
 interface Mark {
@@ -81,6 +89,9 @@ export class GameScene extends Phaser.Scene {
   private readonly food: string;
   /** Whether pălincă is of any use to the player's faction. */
   private readonly drinks: boolean;
+  private readonly initialSave?: SaveGame;
+  private readonly sfx: SoundEngine;
+  private readonly onReturnToMenu?: () => void;
   private world!: World;
   private ais: SkirmishAi[] = [];
   private controls!: CameraControls;
@@ -105,25 +116,78 @@ export class GameScene extends Phaser.Scene {
   private lost = false;
   /** The capital took its cut of the funds that are about to be announced. */
   private taxed = false;
+  private paused = false;
+  private speedIndex = 0;
   private markers: Mark[] = [];
   private sparks: Mark[] = [];
   private accumulator = 0;
   private frame = 0;
+  private readonly lifecycleAc = new AbortController();
 
   constructor(options: GameOptions) {
     super('game');
     this.player = options.player;
     this.peaceful = options.peaceful;
+    this.initialSave = options.save;
+    this.sfx = options.sound ?? new SoundEngine();
+    this.onReturnToMenu = options.onReturnToMenu;
     this.food = FACTIONS[options.player].foodName.toLowerCase();
     this.drinks = FACTIONS[options.player].ability.id === 'palinca';
   }
 
+  private get speed(): number {
+    return SPEEDS[this.speedIndex]!;
+  }
+
   create(): void {
-    this.world = new World({ seed: 1600 });
-    this.ais = FACTION_IDS.filter((f) => f !== this.player).map(
-      (f) => new SkirmishAi(f, { attacks: !this.peaceful }),
-    );
-    this.hud = new Hud((id) => this.handleAction(id));
+    const save = this.initialSave;
+    if (save) {
+      this.world = World.fromSnapshot(save.world);
+      this.ais = save.ais.map((s) => SkirmishAi.fromSnapshot(s));
+      this.goalReached = save.goalReached;
+      this.lost = save.lost;
+      this.taxed = save.taxed;
+    } else {
+      this.world = new World({ seed: 1600 });
+      this.ais = FACTION_IDS.filter((f) => f !== this.player).map(
+        (f) => new SkirmishAi(f, { attacks: !this.peaceful }),
+      );
+    }
+
+    const hook = (globalThis as { __unireaVoiceHook?: VoiceLineHook }).__unireaVoiceHook;
+    if (hook) this.sfx.setVoiceHook(hook);
+
+    this.hud = new Hud({
+      onAction: (id) => {
+        this.sfx.unlock();
+        this.handleAction(id);
+      },
+      onPause: () => {
+        this.sfx.unlock();
+        this.togglePause();
+      },
+      onSpeed: () => {
+        this.sfx.unlock();
+        this.cycleSpeed();
+      },
+      onSave: () => {
+        this.sfx.unlock();
+        this.manualSave();
+      },
+      onMute: () => {
+        const muted = this.sfx.toggleMute();
+        this.hud.setMuted(muted);
+      },
+      onMenu: () => {
+        this.sfx.unlock();
+        if (!this.lost && this.world.winner === null) this.persistSave();
+        this.onReturnToMenu?.();
+      },
+    });
+    this.hud.setPaused(this.paused);
+    this.hud.setSpeed(this.speed);
+    this.hud.setMuted(this.sfx.isMuted());
+
     const map = this.world.map;
 
     // Terrain
@@ -161,27 +225,108 @@ export class GameScene extends Phaser.Scene {
     this.ghost = this.add.image(0, 0, `livada-${this.player}`).setOrigin(0, 0).setDepth(99).setVisible(false);
 
     // Camera and minimap
-    this.controls = new CameraControls(this, map.width * TILE, map.height * TILE, (x, y) =>
-      this.handleTap(x, y),
-    );
-    this.frameStart();
-    // Until the player takes over the camera, re-frame when the window settles
-    // on its real size (WebViews often report a tiny size for the first frame).
-    this.scale.on('resize', () => {
-      if (!this.controls.touched) this.frameStart();
+    this.controls = new CameraControls(this, map.width * TILE, map.height * TILE, (x, y) => {
+      this.sfx.unlock();
+      this.handleTap(x, y);
     });
-    this.minimap = new Minimap(this.hud.minimapCanvas, this.world, (tx, ty) =>
-      this.controls.jumpTo(tx * TILE, ty * TILE),
-    );
+    if (save) {
+      this.controls.setZoom(save.camera.zoom);
+      this.controls.jumpTo(save.camera.x, save.camera.y);
+    } else {
+      this.frameStart();
+      // Until the player takes over the camera, re-frame when the window settles
+      // on its real size (WebViews often report a tiny size for the first frame).
+      this.scale.on('resize', () => {
+        if (!this.controls.touched) this.frameStart();
+      });
+    }
+    this.minimap = new Minimap(this.hud.minimapCanvas, this.world, (tx, ty) => {
+      this.sfx.unlock();
+      this.controls.jumpTo(tx * TILE, ty * TILE);
+    });
 
-    this.hud.toast('Atinge un țăran, apoi o pădure, ca să taie lemne.', this.time.now);
+    const sig = this.lifecycleAc.signal;
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (e.code === 'Space' || e.code === 'KeyP') {
+          e.preventDefault();
+          this.sfx.unlock();
+          this.togglePause();
+        }
+      },
+      { signal: sig },
+    );
+    document.addEventListener(
+      'visibilitychange',
+      () => {
+        if (document.hidden && !this.lost && this.world.winner === null) this.persistSave();
+      },
+      { signal: sig },
+    );
+    window.addEventListener(
+      'pagehide',
+      () => {
+        if (!this.lost && this.world.winner === null) this.persistSave();
+      },
+      { signal: sig },
+    );
+    this.events.once('shutdown', () => {
+      this.lifecycleAc.abort();
+      this.hud.destroy();
+      this.minimap.destroy();
+    });
+    this.events.once('destroy', () => {
+      this.lifecycleAc.abort();
+      this.hud.destroy();
+      this.minimap.destroy();
+    });
+
+    this.hud.toast(
+      save ? 'Partidă reluată.' : 'Atinge un țăran, apoi o pădure, ca să taie lemne.',
+      this.time.now,
+      save ? 3000 : undefined,
+    );
     if (import.meta.env.DEV) {
       (window as unknown as Record<string, unknown>).__unirea = {
         world: this.world,
         controls: this.controls,
         scene: this,
+        sound: this.sfx,
       };
     }
+  }
+
+  private togglePause(): void {
+    this.paused = !this.paused;
+    this.hud.setPaused(this.paused);
+  }
+
+  private cycleSpeed(): void {
+    this.speedIndex = (this.speedIndex + 1) % SPEEDS.length;
+    this.hud.setSpeed(this.speed);
+  }
+
+  private persistSave(): boolean {
+    const cam = this.controls.center;
+    return saveGame({
+      version: 1,
+      savedAt: Date.now(),
+      player: this.player,
+      peaceful: this.peaceful,
+      goalReached: this.goalReached,
+      lost: this.lost,
+      taxed: this.taxed,
+      camera: { x: cam.x, y: cam.y, zoom: this.controls.zoom },
+      world: this.world.toSnapshot(),
+      ais: this.ais.map((ai) => ai.toSnapshot()),
+    });
+  }
+
+  private manualSave(): void {
+    const ok = this.persistSave();
+    if (ok) this.sfx.play('save');
+    this.hud.toast(ok ? 'Partidă salvată.' : 'Nu s-a putut salva.', this.time.now, 2500);
   }
 
   /** Opening shot: the player's court, at a zoom that suits the screen. */
@@ -199,15 +344,21 @@ export class GameScene extends Phaser.Scene {
   override update(time: number, delta: number): void {
     this.controls.update(delta);
 
-    // Fixed-step simulation, decoupled from the display's frame rate.
-    this.accumulator += Math.min(delta, MAX_FRAME_MS);
-    while (this.accumulator >= TICK_MS) {
-      this.world.step();
-      if (this.world.tick % AI_THINK_EVERY === 0) for (const ai of this.ais) ai.think(this.world);
-      this.accumulator -= TICK_MS;
+    if (!this.paused) {
+      // Fixed-step simulation, decoupled from the display's frame rate.
+      const stepMs = Math.min(delta, MAX_FRAME_MS) * this.speed;
+      this.accumulator = Math.min(this.accumulator + stepMs, TICK_MS * 10);
+      while (this.accumulator >= TICK_MS) {
+        this.world.step();
+        if (this.world.tick % AI_THINK_EVERY === 0) for (const ai of this.ais) ai.think(this.world);
+        if (this.world.tick % AUTOSAVE_TICKS === 0 && this.world.winner === null && !this.lost) {
+          this.persistSave();
+        }
+        this.accumulator -= TICK_MS;
+      }
+      for (const event of this.world.drainEvents()) this.handleEvent(event, time);
     }
     const alpha = this.accumulator / TICK_MS;
-    for (const event of this.world.drainEvents()) this.handleEvent(event, time);
 
     this.ground.clear();
     this.top.clear();
@@ -229,6 +380,12 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private nearView(px: number, py: number): boolean {
+    const v = this.controls.viewRect();
+    const pad = TILE * 4;
+    return px >= v.x - pad && px <= v.x + v.width + pad && py >= v.y - pad && py <= v.y + v.height + pad;
+  }
+
   private handleEvent(event: SimEvent, time: number): void {
     switch (event.type) {
       case 'tile': {
@@ -242,18 +399,25 @@ export class GameScene extends Phaser.Scene {
       case 'built': {
         const building = this.world.getBuilding(event.buildingId);
         if (building?.faction === this.player) {
-          this.hud.say(`b${event.buildingId}`, FACTIONS[this.player].builtLine, time);
+          const line = FACTIONS[this.player].builtLine;
+          this.hud.say(`b${event.buildingId}`, line, time);
+          this.sfx.play('built');
+          this.sfx.voice({ faction: this.player, kind: 'built', text: line });
         }
         break;
       }
       case 'distilled':
         if (this.world.getBuilding(event.buildingId)?.faction === this.player) {
           this.hud.say(`b${event.buildingId}`, '+1 pălincă', time);
+          this.sfx.play('distill');
         }
         break;
       case 'trained': {
         const unit = this.world.getUnit(event.unitId);
-        if (unit?.faction === this.player) this.speak(unit, 'select', time);
+        if (unit?.faction === this.player) {
+          this.sfx.play('train');
+          this.speak(unit, 'select', time);
+        }
         break;
       }
       case 'full':
@@ -261,9 +425,11 @@ export class GameScene extends Phaser.Scene {
         break;
       case 'ability':
         if (event.ability === 'taunt') {
+          if (event.faction === this.player) this.sfx.play('taunt');
           this.speak(this.world.getUnit(event.unitId), 'taunt', time);
         } else if (event.ability === 'rezolva') {
           if (event.faction === this.player) {
+            this.sfx.play(event.count > 0 ? 'rezolvaOk' : 'rezolvaFail');
             const line =
               event.count > 0
                 ? `S-a rezolvat: ${event.count === 1 ? 'un lucru e gata' : `${event.count} lucruri sunt gata`}.`
@@ -272,11 +438,14 @@ export class GameScene extends Phaser.Scene {
           }
         } else if (event.ability === 'plaja') {
           if (event.faction === this.player) {
+            this.sfx.play('plaja');
             this.hud.toast(`Au plecat ${event.count} la plajă. Ți-au lăsat ${event.count * 5} pești.`, time, 5000);
           } else if (this.world.units.some((u) => u.faction === this.player && u.stun > 0)) {
+            this.sfx.play('plaja');
             this.hud.toast('Oștenii tăi au lăsat armele și s-au dus la plajă.', time, 5000);
           }
         } else {
+          if (event.faction === this.player) this.sfx.play('palinca');
           // Everybody with a glass in hand says something, friend or foe.
           for (const unit of this.world.units.filter((u) => u.drink > 0).slice(0, 8)) {
             this.speak(unit, 'drink', time);
@@ -285,14 +454,21 @@ export class GameScene extends Phaser.Scene {
         break;
       case 'era': {
         const era = ERAS[event.era]!;
-        if (event.faction === this.player) this.hud.toast(era.announcement, time, 9000);
-        else this.hud.toast(`${FACTIONS[event.faction].name} a trecut în ${era.name}.`, time, 4000);
+        if (event.faction === this.player) {
+          this.sfx.play('era');
+          this.sfx.voice({ faction: this.player, kind: 'era', text: era.announcement });
+          this.hud.toast(era.announcement, time, 9000);
+        } else {
+          this.hud.toast(`${FACTIONS[event.faction].name} a trecut în ${era.name}.`, time, 4000);
+        }
         break;
       }
       case 'bribe':
         if (event.faction === this.player) {
           const line = event.worked ? 'S-o rezolvat.' : 'O luat prunele și n-o făcut nimic.';
           this.hud.say(`b${event.buildingId}`, line, time);
+          this.sfx.play(event.worked ? 'bribeOk' : 'bribeFail');
+          this.sfx.voice({ faction: this.player, kind: 'bribe', text: line });
         }
         break;
       case 'tax':
@@ -303,6 +479,7 @@ export class GameScene extends Phaser.Scene {
           const got = this.taxed ? FUNDS_AMOUNT - CAPITAL_TAX : FUNDS_AMOUNT;
           const cut = this.taxed ? ` Încă ${CAPITAL_TAX} s-au dus la București, la centru.` : '';
           this.hud.toast(`Au intrat fondurile europene: +${got} lemn, +${got} ${this.food}.${cut}`, time, 5000);
+          this.sfx.play('built');
           this.taxed = false;
         }
         break;
@@ -317,14 +494,19 @@ export class GameScene extends Phaser.Scene {
         break;
       case 'haraci':
         if (event.faction === this.player) {
+          this.sfx.play('haraci');
           this.hud.toast(`Poarta cere haraci: ${event.amount} ${this.food}. Plătești, sau vin ienicerii.`, time);
         }
         break;
       case 'haraciPaid':
-        if (event.faction === this.player) this.hud.toast('Haraciul s-a plătit. Deocamdată.', time, 4000);
+        if (event.faction === this.player) {
+          this.sfx.play('bribeOk');
+          this.hud.toast('Haraciul s-a plătit. Deocamdată.', time, 4000);
+        }
         break;
       case 'raid':
         if (event.faction === this.player) {
+          this.sfx.play('raid');
           this.hud.toast(`Vin ienicerii: ${event.count}! Dau în curte o vreme și pleacă.`, time, 7000);
         }
         break;
@@ -339,25 +521,43 @@ export class GameScene extends Phaser.Scene {
           this.placing = null;
           this.selectedUnits.clear();
           this.selectedBuilding = null;
-          this.hud.toast(FACTIONS[this.player].loseLine, time);
+          clearSave();
+          const line = FACTIONS[this.player].loseLine;
+          this.sfx.play('lose');
+          this.sfx.voice({ faction: this.player, kind: 'lose', text: line });
+          this.hud.toast(line, time);
         } else if (this.world.winner === null && !this.lost) {
           this.hud.toast(`${FACTIONS[event.faction].name} a rămas fără curte.`, time, 5000);
         }
         break;
-      case 'scandal':
-        this.speak(this.world.getUnit(event.unitId), 'scandal', time);
+      case 'scandal': {
+        const instigator = this.world.getUnit(event.unitId);
+        if (instigator && this.nearView(instigator.x * SUB_TO_PX, instigator.y * SUB_TO_PX)) {
+          this.sfx.play('scandal');
+        }
+        this.speak(instigator, 'scandal', time);
         for (const id of event.onlookers.slice(0, 3)) this.speak(this.world.getUnit(id), 'scandal', time);
         break;
-      case 'hit':
-        this.sparks.push({ x: event.x * SUB_TO_PX, y: event.y * SUB_TO_PX - 4, bornAt: time });
+      }
+      case 'hit': {
+        const px = event.x * SUB_TO_PX;
+        const py = event.y * SUB_TO_PX;
+        this.sparks.push({ x: px, y: py - 4, bornAt: time });
+        if (this.nearView(px, py)) this.sfx.play('hit');
         break;
+      }
       case 'died': {
         this.unitSprites.get(event.unitId)?.destroy();
         this.unitSprites.delete(event.unitId);
         this.selectedUnits.delete(event.unitId);
         const px = Math.round(event.x * SUB_TO_PX);
         const py = Math.round(event.y * SUB_TO_PX);
-        this.hud.say(`p${px},${py}`, pick(FACTIONS[event.faction].lines.die), time);
+        const line = pick(FACTIONS[event.faction].lines.die);
+        this.hud.say(`p${px},${py}`, line, time);
+        if (event.faction === this.player || this.nearView(px, py)) {
+          this.sfx.play('die');
+          this.sfx.voice({ faction: event.faction, kind: 'die', text: line });
+        }
         break;
       }
       case 'destroyed':
@@ -369,7 +569,13 @@ export class GameScene extends Phaser.Scene {
         this.placing = null;
         this.selectedUnits.clear();
         this.selectedBuilding = null;
-        if (event.faction === this.player) this.hud.toast(FACTIONS[this.player].winLine, time);
+        clearSave();
+        if (event.faction === this.player) {
+          const line = FACTIONS[this.player].winLine;
+          this.sfx.play('win');
+          this.sfx.voice({ faction: this.player, kind: 'win', text: line });
+          this.hud.toast(line, time);
+        }
         break;
     }
   }
@@ -378,7 +584,11 @@ export class GameScene extends Phaser.Scene {
     if (!unit) return;
     // The mall crowd has its own way of talking, wherever it was raised.
     const lines = unit.kind === 'smecher' ? SMECHER_LINES : FACTIONS[unit.faction].lines;
-    this.hud.say(`u${unit.id}`, pick(lines[kind]), time);
+    const text = pick(lines[kind]);
+    this.hud.say(`u${unit.id}`, text, time);
+    if (unit.faction === this.player || this.nearView(unit.x * SUB_TO_PX, unit.y * SUB_TO_PX)) {
+      this.sfx.voice({ faction: unit.faction, unitKind: unit.kind, kind, text });
+    }
   }
 
   // --- Drawing ------------------------------------------------------------------
@@ -727,6 +937,7 @@ export class GameScene extends Phaser.Scene {
     const player = this.player;
     const building = this.selectedBuilding;
     if (id === 'restart') {
+      clearSave();
       location.reload();
     } else if (id === 'menu:build') {
       this.buildMenuOpen = true;
@@ -832,11 +1043,13 @@ export class GameScene extends Phaser.Scene {
         return;
       }
       this.world.issue({ type: 'attack', faction: this.player, unitIds, targetId: unit.id });
+      this.sfx.play('order');
       this.speakAttack(this.world.getUnit(unitIds[0]!), unit.faction, now);
       this.hud.hideToast();
       return;
     }
     if (unit) {
+      this.sfx.play('select');
       this.speak(unit, 'select', now);
       const tappedAgain = this.selectedUnits.size === 1 && this.selectedUnits.has(unit.id);
       this.selectedUnits.clear();
@@ -856,6 +1069,7 @@ export class GameScene extends Phaser.Scene {
     const building = this.world.buildingAt(tx, ty);
 
     if (unitIds.length === 0) {
+      if (building) this.sfx.play('select');
       this.selectedBuilding = building ? building.id : null;
       return;
     }
@@ -863,11 +1077,13 @@ export class GameScene extends Phaser.Scene {
     const kind = this.world.describeTarget(this.player, tx, ty);
     if (building && kind === 'move') {
       // A finished building of yours: look at it instead of walking into the wall.
+      this.sfx.play('select');
       this.selectedUnits.clear();
       this.selectedBuilding = building.id;
       return;
     }
     this.world.issue({ type: 'act', faction: this.player, unitIds, tx, ty });
+    this.sfx.play('order');
     this.markers.push({ x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, bornAt: now });
     if (kind === 'attack' && building) this.speakAttack(this.world.getUnit(unitIds[0]!), building.faction, now);
     else this.speak(this.world.getUnit(unitIds[0]!), kind, now);
@@ -878,8 +1094,12 @@ export class GameScene extends Phaser.Scene {
   private speakAttack(unit: Unit | undefined, target: FactionId, time: number): void {
     if (!unit) return;
     const quip = unit.kind === 'smecher' ? undefined : FACTIONS[unit.faction].quips[target];
-    if (quip && Math.random() < 0.5) this.hud.say(`u${unit.id}`, quip, time);
-    else this.speak(unit, 'attack', time);
+    if (quip && Math.random() < 0.5) {
+      this.hud.say(`u${unit.id}`, quip, time);
+      this.sfx.voice({ faction: unit.faction, unitKind: unit.kind, kind: 'attack', text: quip });
+    } else {
+      this.speak(unit, 'attack', time);
+    }
   }
 
   /** The unit under a tap, with a finger-sized tolerance. */

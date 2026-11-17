@@ -9,7 +9,7 @@ import { SUB, type Building, type Unit, type World } from '../sim/world';
 export const AI_THINK_EVERY = 10;
 
 const WANTED_PEASANTS = 6;
-const WOOD_RESERVE = 60;
+const WOOD_RESERVE = 100;
 const DEFEND_RADIUS = 9 * SUB;
 const FIRST_WAVE = 4;
 const HOME_GUARD = 2;
@@ -17,13 +17,20 @@ const BIGGEST_WAVE = 10;
 /** No marching before this tick (5 minutes): time for the other side to settle in. */
 const FIRST_ATTACK_TICK = 3000;
 /** Keep this much of each resource in hand when paying for a new era. */
-const ERA_RESERVE = 60;
+const ERA_RESERVE = 25;
 const WANTED_SMECHERI = 2;
 const BEACH_RADIUS = 8 * SUB;
 
 export interface AiOptions {
   /** false = a quiet neighbour: builds, defends its court, never marches. */
   readonly attacks?: boolean;
+}
+
+export interface AiSnapshot {
+  readonly faction: FactionId;
+  readonly attacks: boolean;
+  readonly waveSize: number;
+  readonly wavesSent: number;
 }
 
 function distSq(ax: number, ay: number, bx: number, by: number): number {
@@ -51,6 +58,22 @@ export class SkirmishAi {
     options: AiOptions = {},
   ) {
     this.attacks = options.attacks ?? true;
+  }
+
+  toSnapshot(): AiSnapshot {
+    return {
+      faction: this.faction,
+      attacks: this.attacks,
+      waveSize: this.waveSize,
+      wavesSent: this.wavesSent,
+    };
+  }
+
+  static fromSnapshot(snap: AiSnapshot): SkirmishAi {
+    const ai = new SkirmishAi(snap.faction, { attacks: snap.attacks });
+    ai.waveSize = snap.waveSize;
+    ai.wavesSent = snap.wavesSent;
+    return ai;
   }
 
   think(world: World): void {
@@ -124,8 +147,8 @@ export class SkirmishAi {
     else if (count('tabara') === 0) kindNext = 'tabara';
     else if (FACTIONS[faction].ability.id === 'palinca' && count('cazan') === 0) kindNext = 'cazan';
     else if (era >= LAST_ERA && count('mall') === 0) kindNext = 'mall';
-    else if (count('livada') < 2 && peasants.length >= 5) kindNext = 'livada';
     else if (world.canBuild(faction, 'gater') && count('gater') === 0) kindNext = 'gater';
+    else if (count('livada') < 2 && peasants.length >= 5) kindNext = 'livada';
     else if (world.canBuild(faction, 'bloc') && count('bloc') < 2 && world.unitCount(faction) >= world.unitCap(faction) - 3) {
       kindNext = 'bloc';
     }
@@ -165,7 +188,9 @@ export class SkirmishAi {
     const free = new Map<number, number>();
     for (const o of orchards) free.set(o.id, ORCHARD_CAPACITY - world.orchardWorkers(o.id));
     let onWood = peasants.filter((u) => u.order.type === 'gather' && u.order.resource === 'lemn').length;
-    const wantedOnWood = world.stock[faction].lemn < WOOD_RESERVE ? 3 : 2;
+    const hasFishery = buildings.some((b) => b.kind === 'cherhana' && b.done);
+    const wantedOnWood =
+      hasFishery && world.stock[faction].prune >= 150 ? 4 : world.stock[faction].lemn < WOOD_RESERVE ? 3 : 2;
 
     for (const unit of idle) {
       const orchard = orchards.find((o) => (free.get(o.id) ?? 0) > 0);

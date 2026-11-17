@@ -55,8 +55,9 @@ body {
   grid-area: top;
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 2px 14px;
+  gap: 4px 12px;
   padding: calc(6px + env(safe-area-inset-top)) calc(10px + env(safe-area-inset-right)) 6px
     calc(10px + env(safe-area-inset-left));
   background: var(--panel);
@@ -66,9 +67,68 @@ body {
   white-space: nowrap;
 }
 
+#hud-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 10px;
+}
+
 #hud-stock {
   white-space: normal;
   text-align: right;
+}
+
+#hud-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+#hud-controls button,
+#pause-banner button {
+  min-height: 28px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--ink);
+  background: #3d4a2c;
+  border: 1px solid var(--edge);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#hud-controls button.active {
+  background: #7a5a16;
+}
+
+#hud-controls button.muted {
+  opacity: 0.65;
+}
+
+#pause-banner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border: 2px solid var(--edge);
+  pointer-events: auto;
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: #ffe082;
+}
+
+#pause-banner.hidden {
+  display: none;
 }
 
 #info {
@@ -257,6 +317,40 @@ body {
 
 #menu-sub {
   opacity: 0.8;
+}
+
+#menu-continue {
+  margin: 12px 0;
+}
+
+#menu-continue.hidden {
+  display: none;
+}
+
+#menu-continue button {
+  width: 100%;
+  padding: 12px;
+  font: inherit;
+  color: var(--ink);
+  background: #7a5a16;
+  border: 2px solid var(--edge);
+  border-bottom-width: 4px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#menu-continue button strong {
+  display: block;
+  font-size: 17px;
+  color: #ffe082;
+}
+
+#menu-continue button span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  opacity: 0.9;
 }
 
 #menu-factions {

@@ -44,8 +44,8 @@ export const ERAS: readonly EraDef[] = [
   {
     name: 'România Mare',
     year: 1918,
-    advanceLemn: 150,
-    advancePrune: 150,
+    advanceLemn: 110,
+    advancePrune: 110,
     advanceTicks: 200,
     costPercent: 100,
     trainTimePercent: 100,
@@ -54,8 +54,8 @@ export const ERAS: readonly EraDef[] = [
   {
     name: 'Epoca de Aur',
     year: 1975,
-    advanceLemn: 250,
-    advancePrune: 250,
+    advanceLemn: 150,
+    advancePrune: 150,
     advanceTicks: 200,
     costPercent: 50,
     trainTimePercent: 200,
@@ -64,8 +64,8 @@ export const ERAS: readonly EraDef[] = [
   {
     name: 'Prezent',
     year: 2024,
-    advanceLemn: 400,
-    advancePrune: 400,
+    advanceLemn: 200,
+    advancePrune: 200,
     advanceTicks: 200,
     costPercent: 150,
     trainTimePercent: 100,

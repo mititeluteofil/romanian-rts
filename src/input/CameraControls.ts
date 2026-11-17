@@ -56,6 +56,10 @@ export class CameraControls {
     return this.cam.zoom;
   }
 
+  get center(): { x: number; y: number } {
+    return { x: this.centerX, y: this.centerY };
+  }
+
   /** Smallest zoom that still keeps the view inside the map. */
   private get minZoom(): number {
     return Math.max(1, this.cam.width / this.worldWidth, this.cam.height / this.worldHeight);

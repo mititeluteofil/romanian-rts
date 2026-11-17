@@ -36,6 +36,7 @@ export class Minimap {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly base: ImageData;
   private readonly map: GameMap;
+  private readonly ac = new AbortController();
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -58,13 +59,25 @@ export class Minimap {
         ((event.clientY - rect.top) / rect.height) * this.map.height,
       );
     };
-    canvas.addEventListener('pointerdown', (event) => {
-      canvas.setPointerCapture(event.pointerId);
-      jump(event);
-    });
-    canvas.addEventListener('pointermove', (event) => {
-      if (canvas.hasPointerCapture(event.pointerId)) jump(event);
-    });
+    canvas.addEventListener(
+      'pointerdown',
+      (event) => {
+        canvas.setPointerCapture(event.pointerId);
+        jump(event);
+      },
+      { signal: this.ac.signal },
+    );
+    canvas.addEventListener(
+      'pointermove',
+      (event) => {
+        if (canvas.hasPointerCapture(event.pointerId)) jump(event);
+      },
+      { signal: this.ac.signal },
+    );
+  }
+
+  destroy(): void {
+    this.ac.abort();
   }
 
   /** Rebuild the terrain layer; call when tiles change (a forest is cut down). */

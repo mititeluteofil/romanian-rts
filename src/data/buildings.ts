@@ -119,7 +119,7 @@ export const BUILDINGS: Readonly<Record<BuildingKind, BuildingDef>> = {
     kind: 'mall',
     name: 'Mall',
     size: 3,
-    costLemn: 200,
+    costLemn: 140,
     buildTicks: 200,
     hp: 900,
     blocks: true,

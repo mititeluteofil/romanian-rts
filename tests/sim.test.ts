@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { SoundEngine, type VoiceLineContext } from '../src/audio/sound';
 import { BUILDINGS } from '../src/data/buildings';
+import { formatSaveSummary, loadGame } from '../src/save';
 import { PLACES, Region } from '../src/data/romania';
 import { GameMap, generateRomania, latToY, lonToX, placeTile, Terrain } from '../src/sim/map';
 import { findPath, nearestPassable, nearestTile } from '../src/sim/pathfinding';
@@ -973,5 +975,80 @@ describe('four principalities and the Porte', () => {
     }
     expect(a.world.buildings.some((b) => b.kind === 'cherhana' && b.faction === 'dobrogea')).toBe(true);
     expect(play().sums).toEqual(a.sums);
+  });
+});
+
+describe('saves, crowd fan-out and voice hook', () => {
+  it('saves and restores a full Romania match with identical future checksums', () => {
+    const world = new World({ seed: 1600 });
+    const ais = FACTION_IDS.map((f) => new SkirmishAi(f));
+    for (let i = 0; i < 2000; i++) {
+      world.step();
+      if (world.tick % AI_THINK_EVERY === 0) for (const ai of ais) ai.think(world);
+    }
+
+    const snap = JSON.parse(JSON.stringify(world.toSnapshot()));
+    const aiSnaps = JSON.parse(JSON.stringify(ais.map((a) => a.toSnapshot())));
+    const restored = World.fromSnapshot(snap);
+    const restoredAis = aiSnaps.map((s: ReturnType<SkirmishAi['toSnapshot']>) => SkirmishAi.fromSnapshot(s));
+
+    expect(restored.checksum()).toBe(world.checksum());
+    for (let i = 0; i < 1000; i++) {
+      world.step();
+      restored.step();
+      if (world.tick % AI_THINK_EVERY === 0) {
+        for (const ai of ais) ai.think(world);
+        for (const ai of restoredAis) ai.think(restored);
+      }
+      if (i % 100 === 0) expect(restored.checksum()).toBe(world.checksum());
+    }
+    expect(restored.checksum()).toBe(world.checksum());
+  });
+
+  it('fans out moving crowds and avoids stationary bystanders', () => {
+    const map = mapFromRows(Array.from({ length: 12 }, () => '.'.repeat(12)));
+    const world = new World({ seed: 1, map });
+    world.spawnUnit('ardeal', 6, 6); // bystander sitting on destination
+    const group = [0, 1, 2, 3].map((i) => world.spawnUnit('ardeal', 1, 4 + i).id);
+    world.issue({ type: 'move', faction: 'ardeal', unitIds: group, tx: 6, ty: 6 });
+    run(world, 120);
+    const tiles = new Set(world.units.map((u) => world.map.index(Math.floor(u.x / SUB), Math.floor(u.y / SUB))));
+    expect(tiles.size).toBe(5);
+  });
+
+  it('spreads attackers around an enemy court instead of stacking on one tile', () => {
+    const world = battlefield();
+    const court = world.courtOf('moldova')!;
+    const attackers = [0, 1, 2, 3].map((i) => world.spawnUnit('ardeal', 25, 5 + i, 'ostas'));
+    world.issue({ type: 'attack', faction: 'ardeal', unitIds: attackers.map((u) => u.id), targetId: court.id });
+    run(world, 80);
+    const tiles = new Set(attackers.map((u) => world.map.index(Math.floor(u.x / SUB), Math.floor(u.y / SUB))));
+    expect(tiles.size).toBe(4);
+  });
+
+  it('invokes the voice-line hook and formats save summaries', () => {
+    const sound = new SoundEngine();
+    const heard: VoiceLineContext[] = [];
+    sound.setVoiceHook((ctx) => heard.push(ctx));
+    sound.voice({ faction: 'ardeal', unitKind: 'taran', kind: 'select', text: 'No, ce-i?' });
+    expect(heard).toEqual([{ faction: 'ardeal', unitKind: 'taran', kind: 'select', text: 'No, ce-i?' }]);
+
+    const world = new World({ seed: 1600 });
+    run(world, 650);
+    const summary = formatSaveSummary({
+      version: 1,
+      savedAt: 0,
+      player: 'moldova',
+      peaceful: true,
+      goalReached: false,
+      lost: false,
+      taxed: false,
+      camera: { x: 0, y: 0, zoom: 2 },
+      world: world.toSnapshot(),
+      ais: [],
+    });
+    expect(summary).toContain('Moldova');
+    expect(summary).toContain('Fără război');
+    expect(loadGame()).toBeNull();
   });
 });

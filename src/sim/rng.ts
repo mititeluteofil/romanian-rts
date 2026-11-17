@@ -12,6 +12,14 @@ export class Rng {
     this.state = seed >>> 0;
   }
 
+  getState(): number {
+    return this.state;
+  }
+
+  setState(state: number): void {
+    this.state = state >>> 0;
+  }
+
   /** Next unsigned 32-bit integer. */
   nextU32(): number {
     this.state = (this.state + 0x6d2b79f5) >>> 0;

@@ -14,6 +14,15 @@ export interface ActionButton {
   readonly primary?: boolean;
 }
 
+export interface HudCallbacks {
+  readonly onAction: (id: string) => void;
+  readonly onPause: () => void;
+  readonly onSpeed: () => void;
+  readonly onSave: () => void;
+  readonly onMute: () => void;
+  readonly onMenu: () => void;
+}
+
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
   if (!el) throw new Error(`Missing #${id} in index.html`);
@@ -35,15 +44,43 @@ export class Hud {
   private readonly actions = byId<HTMLDivElement>('actions');
   private readonly debug = byId<HTMLDivElement>('debug');
   private readonly bubbleLayer = byId<HTMLDivElement>('bubbles');
+  private readonly pauseBtn = byId<HTMLButtonElement>('btn-pause');
+  private readonly speedBtn = byId<HTMLButtonElement>('btn-speed');
+  private readonly saveBtn = byId<HTMLButtonElement>('btn-save');
+  private readonly muteBtn = byId<HTMLButtonElement>('btn-mute');
+  private readonly menuBtn = byId<HTMLButtonElement>('btn-menu');
+  private readonly pauseBanner = byId<HTMLDivElement>('pause-banner');
+  private readonly resumeBtn = byId<HTMLButtonElement>('btn-resume');
   private readonly bubbles = new Map<string, Bubble>();
+  private readonly ac = new AbortController();
   private actionsKey = '';
   private toastUntil = Infinity;
 
-  constructor(onAction: (id: string) => void) {
-    this.actions.addEventListener('click', (event) => {
-      const button = (event.target as HTMLElement).closest('button');
-      if (button && !button.disabled && button.dataset.action) onAction(button.dataset.action);
-    });
+  constructor(callbacks: HudCallbacks) {
+    const signal = this.ac.signal;
+    this.actions.addEventListener(
+      'click',
+      (event) => {
+        const button = (event.target as HTMLElement).closest('button');
+        if (button && !button.disabled && button.dataset.action) callbacks.onAction(button.dataset.action);
+      },
+      { signal },
+    );
+    this.pauseBtn.addEventListener('click', () => callbacks.onPause(), { signal });
+    this.resumeBtn.addEventListener('click', () => callbacks.onPause(), { signal });
+    this.speedBtn.addEventListener('click', () => callbacks.onSpeed(), { signal });
+    this.saveBtn.addEventListener('click', () => callbacks.onSave(), { signal });
+    this.muteBtn.addEventListener('click', () => callbacks.onMute(), { signal });
+    this.menuBtn.addEventListener('click', () => callbacks.onMenu(), { signal });
+  }
+
+  destroy(): void {
+    this.ac.abort();
+    for (const b of this.bubbles.values()) b.el.remove();
+    this.bubbles.clear();
+    this.actions.replaceChildren();
+    this.pauseBanner.classList.add('hidden');
+    this.hideToast();
   }
 
   private static set(el: HTMLElement, text: string): void {
@@ -68,6 +105,22 @@ export class Hud {
 
   setDebug(text: string): void {
     Hud.set(this.debug, text);
+  }
+
+  setPaused(paused: boolean): void {
+    Hud.set(this.pauseBtn, paused ? 'Continuă' : 'Pauză');
+    this.pauseBtn.classList.toggle('active', paused);
+    this.pauseBanner.classList.toggle('hidden', !paused);
+  }
+
+  setSpeed(speed: number): void {
+    Hud.set(this.speedBtn, `${speed}×`);
+    this.speedBtn.classList.toggle('active', speed > 1);
+  }
+
+  setMuted(muted: boolean): void {
+    Hud.set(this.muteBtn, muted ? 'Mut' : 'Sonor');
+    this.muteBtn.classList.toggle('muted', muted);
   }
 
   /** Replace the action bar; rebuilt only when something actually changed. */

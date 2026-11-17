@@ -1,6 +1,7 @@
 import { BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
 import { BRIBE_ERA, ERAS, LAST_ERA } from '../data/eras';
 import {
+  ALL_FACTION_IDS,
   FACTION_IDS,
   FACTIONS,
   isFighter,
@@ -11,7 +12,7 @@ import {
   type UnitKind,
 } from '../data/factions';
 import { PLACES } from '../data/romania';
-import { GameMap, generateRomania, placeTile, Terrain } from './map';
+import { GameMap, generateRomania, placeTile, Terrain, WOOD_PER_FOREST } from './map';
 import { findPath, nearestPassable, nearestTile } from './pathfinding';
 import { fnv1a, Rng } from './rng';
 
@@ -96,6 +97,7 @@ export interface Haraci {
 export const DISTILL_TICKS = 80;
 const DISTILL_PRUNE = 5;
 const DISTILL_LEMN = 1;
+const MAX_PALINCA = 15;
 /** Pălincă: own units pause this long, nearby enemies longer, then the buff runs. */
 const DRINK_TICKS = 30;
 const ENEMY_DRINK_TICKS = 50;
@@ -263,6 +265,32 @@ export interface WorldOptions {
   readonly haraci?: boolean;
 }
 
+export interface WorldSnapshot {
+  readonly version: 1;
+  readonly seed: number;
+  readonly haraciOn: boolean;
+  readonly tick: number;
+  readonly nextId: number;
+  readonly winner: FactionId | null;
+  readonly rngState: number;
+  readonly stock: Record<FactionId, Stock>;
+  readonly buff: Record<FactionId, number>;
+  readonly abilityCooldown: Record<FactionId, number>;
+  readonly era: Record<FactionId, number>;
+  readonly haraci: Record<FactionId, Haraci>;
+  readonly units: Unit[];
+  readonly buildings: Building[];
+  readonly pending: Command[];
+  readonly forestChanges: readonly (readonly [number, number])[];
+  readonly customMap?: {
+    readonly width: number;
+    readonly height: number;
+    readonly tiles: number[];
+    readonly regions: number[];
+    readonly wood: number[];
+  };
+}
+
 type Target = { readonly unit: Unit; readonly building?: undefined } | { readonly building: Building; readonly unit?: undefined };
 
 /**
@@ -291,17 +319,125 @@ export class World {
   /** Building id occupying each tile, 0 if none. */
   private readonly occupant: Int32Array;
   private readonly rng: Rng;
+  private readonly seed: number;
   private readonly haraciOn: boolean;
+  private readonly hasCustomMap: boolean;
   private nextId = 1;
   private pending: Command[] = [];
   private events: SimEvent[] = [];
+  private readonly clearedForestTiles: number[] = [];
 
-  constructor(options: WorldOptions) {
+  constructor(options: WorldOptions, skipSetup = false) {
+    this.seed = options.seed;
+    this.hasCustomMap = Boolean(options.map);
     this.map = options.map ?? generateRomania(options.seed);
     this.occupant = new Int32Array(this.map.width * this.map.height);
     this.rng = new Rng(options.seed);
     this.haraciOn = options.haraci ?? !options.map;
-    if (!options.map) this.setupRomania();
+    if (!options.map && !skipSetup) this.setupRomania();
+  }
+
+  toSnapshot(): WorldSnapshot {
+    return {
+      version: 1,
+      seed: this.seed,
+      haraciOn: this.haraciOn,
+      tick: this.tick,
+      nextId: this.nextId,
+      winner: this.winner,
+      rngState: this.rng.getState(),
+      stock: perFaction((f) => ({ ...this.stock[f] })),
+      buff: perFaction((f) => this.buff[f]),
+      abilityCooldown: perFaction((f) => this.abilityCooldown[f]),
+      era: perFaction((f) => this.era[f]),
+      haraci: perFaction((f) => ({ ...this.haraci[f] })),
+      units: this.units.map((u) => ({
+        ...u,
+        path: [...u.path],
+        order:
+          u.order.type === 'build'
+            ? { ...u.order, resume: u.order.resume ? { ...u.order.resume } : null }
+            : { ...u.order },
+      })),
+      buildings: this.buildings.map((b) => ({ ...b, queue: [...b.queue] })),
+      pending: this.pending.map((c) => ('unitIds' in c ? { ...c, unitIds: [...c.unitIds] } : { ...c })),
+      forestChanges: this.hasCustomMap ? [] : this.collectForestChanges(),
+      customMap: this.hasCustomMap
+        ? {
+            width: this.map.width,
+            height: this.map.height,
+            tiles: Array.from(this.map.tiles),
+            regions: Array.from(this.map.regions),
+            wood: Array.from(this.map.wood),
+          }
+        : undefined,
+    };
+  }
+
+  private collectForestChanges(): [number, number][] {
+    const changes: [number, number][] = [];
+    // Track tiles that started as forest (either have wood < WOOD_PER_FOREST, or became grass via clearing).
+    for (const i of this.clearedForestTiles) changes.push([i, 0]);
+    for (let i = 0; i < this.map.wood.length; i++) {
+      const w = this.map.wood[i]!;
+      if (w > 0 && w < WOOD_PER_FOREST) changes.push([i, w]);
+    }
+    return changes;
+  }
+
+  static fromSnapshot(snap: WorldSnapshot): World {
+    let map: GameMap | undefined;
+    if (snap.customMap) {
+      map = new GameMap(snap.customMap.width, snap.customMap.height);
+      map.tiles.set(snap.customMap.tiles);
+      map.regions.set(snap.customMap.regions);
+      map.wood.set(snap.customMap.wood);
+    }
+    const world = new World({ seed: snap.seed, map, haraci: snap.haraciOn }, true);
+    if (!snap.customMap) {
+      for (const [i, w] of snap.forestChanges) {
+        world.map.wood[i] = w;
+        if (w === 0 && world.map.tiles[i] === Terrain.Forest) {
+          world.map.tiles[i] = Terrain.Grass;
+          world.clearedForestTiles.push(i);
+        }
+      }
+    }
+    world.tick = snap.tick;
+    world.nextId = snap.nextId;
+    world.winner = snap.winner;
+    world.rng.setState(snap.rngState);
+    for (const f of ALL_FACTION_IDS) {
+      world.stock[f] = { ...snap.stock[f] };
+      world.buff[f] = snap.buff[f];
+      world.abilityCooldown[f] = snap.abilityCooldown[f];
+      world.era[f] = snap.era[f];
+      world.haraci[f] = { ...snap.haraci[f] };
+    }
+    for (const u of snap.units) {
+      world.units.push({
+        ...u,
+        path: [...u.path],
+        order:
+          u.order.type === 'build'
+            ? { ...u.order, resume: u.order.resume ? { ...u.order.resume } : null }
+            : { ...u.order },
+      });
+    }
+    for (const b of snap.buildings) {
+      const copy: Building = { ...b, queue: [...b.queue] };
+      world.buildings.push(copy);
+      const def = BUILDINGS[copy.kind];
+      for (let dy = 0; dy < def.size; dy++) {
+        for (let dx = 0; dx < def.size; dx++) {
+          const idx = world.map.index(copy.tx + dx, copy.ty + dy);
+          world.occupant[idx] = copy.id;
+          if (def.blocks) world.map.blocked[idx] = 1;
+        }
+      }
+    }
+    world.pending = snap.pending.map((c) => ('unitIds' in c ? { ...c, unitIds: [...c.unitIds] } : { ...c }));
+    return world;
   }
 
   /** 1600: Alba Iulia, Iași, Târgoviște and — under the Porte's eye — Constanța. */
@@ -897,9 +1033,23 @@ export class World {
     if (unit.path.length === 0) unit.path.push(this.map.index(sx, sy));
   }
 
-  private orderMove(units: Unit[], tx: number, ty: number): void {
-    // Each unit gets its own destination tile so a group does not stack.
+  /** Destination (or current) tile for every unit except `excludeId`, for crowd fan-out. */
+  private unitDestinations(excludeId = -1): Set<number> {
     const taken = new Set<number>();
+    for (const u of this.units) {
+      if (u.id === excludeId) continue;
+      taken.add(u.path.length > 0 ? u.path[0]! : this.tileOf(u));
+    }
+    return taken;
+  }
+
+  private orderMove(units: Unit[], tx: number, ty: number): void {
+    // Fan out around the target tile and avoid stationary bystanders.
+    const moving = new Set(units.map((u) => u.id));
+    const taken = new Set<number>();
+    for (const other of this.units) {
+      if (!moving.has(other.id) && other.path.length === 0) taken.add(this.tileOf(other));
+    }
     for (const unit of units) {
       const goal = nearestPassable(this.map, tx, ty, taken);
       if (goal === -1) continue;
@@ -966,7 +1116,7 @@ export class World {
   }
 
   private orderBuild(unit: Unit, building: Building): void {
-    const approach = this.approachTile(building, unit);
+    const approach = this.approachTile(building, unit, this.unitDestinations(unit.id));
     if (approach === -1) return;
     const o = unit.order;
     const resume =
@@ -986,24 +1136,59 @@ export class World {
     return tx >= building.tx - 1 && tx <= building.tx + size && ty >= building.ty - 1 && ty <= building.ty + size;
   }
 
-  /** Passable tile next to (or inside, if walkable) a building, nearest to the unit. */
-  private approachTile(building: Building, unit: Unit): number {
+  /** Passable tile next to (or inside, if walkable) a building, nearest to the unit, fanning out around `taken`. */
+  private approachTile(building: Building, unit: Unit, taken?: ReadonlySet<number>): number {
     const size = BUILDINGS[building.kind].size;
+    const ux = Math.floor(unit.x / SUB);
+    const uy = Math.floor(unit.y / SUB);
+    let freeBest = -1;
+    let freeD = 0;
+    let anyBest = -1;
+    let anyD = 0;
+    for (let ty = building.ty - 1; ty <= building.ty + size; ty++) {
+      for (let tx = building.tx - 1; tx <= building.tx + size; tx++) {
+        if (!this.map.isPassable(tx, ty)) continue;
+        const idx = this.map.index(tx, ty);
+        const d = (tx - ux) * (tx - ux) + (ty - uy) * (ty - uy);
+        if (anyBest === -1 || d < anyD) {
+          anyBest = idx;
+          anyD = d;
+        }
+        if (!taken?.has(idx) && (freeBest === -1 || d < freeD)) {
+          freeBest = idx;
+          freeD = d;
+        }
+      }
+    }
+    return freeBest !== -1 ? freeBest : anyBest;
+  }
+
+  /** Passable tile adjacent to an enemy unit so attackers surround it instead of stacking. */
+  private approachUnitTile(target: Unit, unit: Unit, taken: ReadonlySet<number>): number {
+    const targetTile = this.tileOf(target);
+    if (!taken.has(targetTile)) return targetTile;
+    const ttx = Math.floor(target.x / SUB);
+    const tty = Math.floor(target.y / SUB);
     const ux = Math.floor(unit.x / SUB);
     const uy = Math.floor(unit.y / SUB);
     let best = -1;
     let bestD = 0;
-    for (let ty = building.ty - 1; ty <= building.ty + size; ty++) {
-      for (let tx = building.tx - 1; tx <= building.tx + size; tx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const tx = ttx + dx;
+        const ty = tty + dy;
         if (!this.map.isPassable(tx, ty)) continue;
+        const idx = this.map.index(tx, ty);
+        if (taken.has(idx)) continue;
         const d = (tx - ux) * (tx - ux) + (ty - uy) * (ty - uy);
         if (best === -1 || d < bestD) {
-          best = this.map.index(tx, ty);
+          best = idx;
           bestD = d;
         }
       }
     }
-    return best;
+    return best !== -1 ? best : targetTile;
   }
 
   private nearestDepot(unit: Unit): Building | undefined {
@@ -1195,7 +1380,10 @@ export class World {
     order.repath--;
     if (order.repath <= 0 || unit.path.length === 0) {
       order.repath = REPATH_TICKS;
-      const goal = current.unit ? this.tileOf(current.unit) : this.approachTile(current.building, unit);
+      const taken = this.unitDestinations(unit.id);
+      const goal = current.unit
+        ? this.approachUnitTile(current.unit, unit, taken)
+        : this.approachTile(current.building, unit, taken);
       if (goal === -1) {
         unit.order = { type: 'idle' };
         return;
@@ -1308,6 +1496,7 @@ export class World {
         this.map.wood[order.tile] = this.map.wood[order.tile]! - amount;
         if (this.map.wood[order.tile] === 0) {
           this.map.tiles[order.tile] = Terrain.Grass;
+          if (!this.hasCustomMap) this.clearedForestTiles.push(order.tile);
           this.events.push({ type: 'tile', index: order.tile });
         }
       }
@@ -1451,7 +1640,7 @@ export class World {
 
     if (building.kind === 'cazan') {
       if (building.distillLeft === 0) {
-        if (stock.prune >= DISTILL_PRUNE && stock.lemn >= DISTILL_LEMN) {
+        if (stock.palinca < MAX_PALINCA && stock.prune >= DISTILL_PRUNE && stock.lemn >= DISTILL_LEMN) {
           stock.prune -= DISTILL_PRUNE;
           stock.lemn -= DISTILL_LEMN;
           building.distillLeft = DISTILL_TICKS;
