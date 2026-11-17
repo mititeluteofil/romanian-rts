@@ -87,6 +87,23 @@ export class CameraControls {
     this.clamp();
   }
 
+  /** Player-driven jump (minimap): centre on a world point and keep it there. */
+  jumpTo(wx: number, wy: number): void {
+    this.touched = true;
+    this.centerOn(wx, wy);
+  }
+
+  /** The part of the world on screen, in world pixels. */
+  viewRect(): { x: number; y: number; width: number; height: number } {
+    const topLeft = this.screenToWorld(0, 0);
+    return {
+      x: topLeft.x,
+      y: topLeft.y,
+      width: this.cam.width / this.cam.zoom,
+      height: this.cam.height / this.cam.zoom,
+    };
+  }
+
   setZoom(zoom: number): void {
     this.zoomAt(this.cam.width / 2, this.cam.height / 2, zoom);
   }

@@ -82,38 +82,57 @@ class Heap {
 }
 
 /**
- * Closest passable tile to (x, y) that is not in `taken`, or -1.
- * Searches growing square rings and picks the nearest tile in the first ring
- * that has a candidate.
+ * Closest tile to (x, y) accepted by `accept`, or -1. Searches growing
+ * square rings (perimeter only) and picks the nearest tile in the first ring
+ * that has a candidate; ties go to the lowest index, so it is deterministic.
  */
+export function nearestTile(
+  map: GameMap,
+  x: number,
+  y: number,
+  accept: (index: number, tx: number, ty: number) => boolean,
+  maxRadius: number = Math.max(map.width, map.height),
+): number {
+  for (let r = 0; r <= maxRadius; r++) {
+    let best = -1;
+    let bestD = 0;
+    const consider = (tx: number, ty: number): void => {
+      if (!map.inBounds(tx, ty)) return;
+      const idx = map.index(tx, ty);
+      if (!accept(idx, tx, ty)) return;
+      const dx = tx - x;
+      const dy = ty - y;
+      const d = dx * dx + dy * dy;
+      if (best === -1 || d < bestD || (d === bestD && idx < best)) {
+        best = idx;
+        bestD = d;
+      }
+    };
+    if (r === 0) {
+      consider(x, y);
+    } else {
+      for (let dx = -r; dx <= r; dx++) {
+        consider(x + dx, y - r);
+        consider(x + dx, y + r);
+      }
+      for (let dy = -r + 1; dy <= r - 1; dy++) {
+        consider(x - r, y + dy);
+        consider(x + r, y + dy);
+      }
+    }
+    if (best !== -1) return best;
+  }
+  return -1;
+}
+
+/** Closest passable tile to (x, y) that is not in `taken`, or -1. */
 export function nearestPassable(
   map: GameMap,
   x: number,
   y: number,
   taken?: ReadonlySet<number>,
 ): number {
-  const maxR = Math.max(map.width, map.height);
-  for (let r = 0; r <= maxR; r++) {
-    let best = -1;
-    let bestD = 0;
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const tx = x + dx;
-        const ty = y + dy;
-        if (!map.isPassable(tx, ty)) continue;
-        const idx = map.index(tx, ty);
-        if (taken?.has(idx)) continue;
-        const d = dx * dx + dy * dy;
-        if (best === -1 || d < bestD) {
-          best = idx;
-          bestD = d;
-        }
-      }
-    }
-    if (best !== -1) return best;
-  }
-  return -1;
+  return nearestTile(map, x, y, (idx, tx, ty) => map.isPassable(tx, ty) && !taken?.has(idx));
 }
 
 /**

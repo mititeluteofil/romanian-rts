@@ -13,12 +13,32 @@
     <div id="game"></div>
     <div id="hud">
       <div id="topbar">
-        <span id="hud-title">Anul 1600</span>
-        <span id="hud-selection">Niciun țăran ales</span>
+        <span id="hud-title"></span>
+        <span id="hud-stock"></span>
       </div>
+      <div id="info">
+        <div id="hud-objective"></div>
+        <div id="hud-selection"></div>
+      </div>
+      <canvas id="minimap" aria-label="Harta României"></canvas>
       <div id="bubbles"></div>
-      <div id="hint">Atinge un țăran ca să-l alegi, apoi atinge harta ca să-l trimiți.</div>
+      <div id="bottom">
+        <div id="toast" class="hidden"></div>
+        <div id="actions"></div>
+      </div>
       <div id="debug"></div>
+    </div>
+    <div id="menu">
+      <div id="menu-box">
+        <h1>Unirea</h1>
+        <p id="menu-sub">no, las’ că vedem · anul 1600</p>
+        <p>Alege-ți principatul. Celălalt îți vine la curte cu oastea.</p>
+        <label id="menu-mode">
+          <input type="checkbox" id="menu-peace" />
+          <span>Fără război: doar gospodărie, din 1600 până la mall.</span>
+        </label>
+        <div id="menu-factions"></div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
