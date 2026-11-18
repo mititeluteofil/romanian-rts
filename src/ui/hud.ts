@@ -108,6 +108,7 @@ export class Hud {
     this.bubbles.clear();
     this.actions.replaceChildren();
     this.pauseBanner.classList.add('hidden');
+    this.setOnline(false);
     this.haraciBox.classList.add('hidden');
     this.hideToast();
   }
@@ -149,6 +150,11 @@ export class Hud {
     Hud.set(this.pauseBtn, paused ? 'Continuă' : 'Pauză');
     this.pauseBtn.classList.toggle('active', paused);
     this.pauseBanner.classList.toggle('hidden', !paused);
+  }
+
+  /** Online matches share one clock and are not saved: hide pause, speed and save. */
+  setOnline(online: boolean): void {
+    for (const btn of [this.pauseBtn, this.speedBtn, this.saveBtn]) btn.classList.toggle('hidden', online);
   }
 
   setSpeed(speed: number): void {

@@ -42,7 +42,24 @@ npm run typecheck   # Run tsc --noEmit
 npm run build       # Typecheck + production Vite bundle in dist/
 ```
 
-URL shortcuts for testing: `?faction=moldova` skips the menu; `&peace=1` starts in no-war mode.
+URL shortcuts for testing: `?faction=moldova` skips the menu; `&peace=1` starts in no-war mode;
+`?room=ABCDE` opens the multiplayer panel with that room code filled in.
+
+## Online multiplayer
+
+Menu → **Multiplayer online** → *Creează cameră* gives a 5-character room code; friends enter it under
+*Intră*. Players get principalities in join order (Ardeal, Moldova, Țara Românească, Dobrogea, then
+Oltenia); the host's war/peace, map size and difficulty apply, and the AI plays the free principalities.
+Online matches have no pause, speed-up or saves.
+
+The client connects to the lockstep relay at `/relay?room=<code>` on the page's own origin. Builds that
+are not served from the site (the Android app) need the deployed host baked in:
+
+```bash
+VITE_RELAY_URL=https://<your-worker-host> npm run android:sync
+```
+
+Local test: `npm run build`, then `npx wrangler@4 dev` and open two tabs on http://localhost:8787.
 
 ## Android (Capacitor)
 

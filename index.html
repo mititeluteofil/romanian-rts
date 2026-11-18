@@ -75,7 +75,7 @@
             autocomplete="off"
           />
         </label>
-        <p>Alege-ți principatul. Ceilalți trei îți vin la curte cu oastea, iar Poarta vine după haraci.</p>
+        <p id="menu-intro">Alege-ți principatul. Ceilalți trei îți vin la curte cu oastea, iar Poarta vine după haraci.</p>
         <label id="menu-mode">
           <input type="checkbox" id="menu-peace" />
           <span>Fără război: doar gospodărie, din 1600 până la mall.</span>
@@ -89,7 +89,43 @@
           <button type="button" data-difficulty="normal" class="active">Normal</button>
           <button type="button" data-difficulty="greu">Greu</button>
         </div>
+        <button type="button" id="btn-mp-open">Multiplayer online</button>
+        <div id="mp-panel" class="hidden">
+          <div id="mp-start">
+            <p>Joacă cu prietenii, fiecare pe principatul lui. Restul principatelor le ține calculatorul.</p>
+            <button type="button" id="btn-mp-create" class="primary">Creează cameră</button>
+            <form id="mp-join-form">
+              <input
+                type="text"
+                id="mp-code"
+                maxlength="5"
+                placeholder="Cod cameră"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                aria-label="Cod cameră"
+              />
+              <button type="submit" id="btn-mp-join">Intră</button>
+            </form>
+            <button type="button" id="btn-mp-back">Înapoi</button>
+          </div>
+          <div id="mp-lobby" class="hidden">
+            <p>Cod cameră: <strong id="mp-room-code"></strong></p>
+            <ol id="mp-players"></ol>
+            <p id="mp-hint"></p>
+            <button type="button" id="btn-mp-start" class="primary" disabled>Începe partida</button>
+            <button type="button" id="btn-mp-leave">Ieși din cameră</button>
+          </div>
+          <p id="mp-status" role="status" aria-live="polite"></p>
+        </div>
         <div id="menu-factions"></div>
+      </div>
+    </div>
+    <div id="net-banner" class="hidden" role="alertdialog" aria-labelledby="net-banner-text">
+      <p id="net-banner-text"></p>
+      <div id="net-banner-actions">
+        <button type="button" id="btn-net-continue" class="hidden">Continuă oricum</button>
+        <button type="button" id="btn-net-menu" class="primary">Înapoi la meniu</button>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

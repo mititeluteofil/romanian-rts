@@ -73,6 +73,8 @@ export interface GameOptions {
   readonly includeOltenia?: boolean;
   /** Optional lockstep command sink for multiplayer matches. */
   readonly commandSink?: CommandSink;
+  /** Online match: shared seed, no pause/speed/saves, and these factions are humans (no AI). */
+  readonly online?: { readonly seed: number; readonly humanFactions: readonly FactionId[] };
   /** Optional saved game to resume instead of starting from 1600. */
   readonly save?: SaveGame;
   readonly sound?: SoundEngine;
@@ -107,6 +109,11 @@ export class GameScene extends Phaser.Scene {
   private readonly mapScale: number;
   private readonly includeOltenia: boolean;
   private readonly commandSink?: CommandSink;
+  private readonly online?: GameOptions['online'];
+  /** time.now when the lockstep first had to wait for other players, or null. */
+  private stalledSince: number | null = null;
+  /** time.now until which a network notice owns the toast (the stall hint stays out of its way). */
+  private noticeUntil = 0;
   /** What the food is called here, in lower case: "prune", "perje", "pește". */
   private readonly food: string;
   /** Whether pălincă is of any use to the player's faction. */
@@ -161,6 +168,7 @@ export class GameScene extends Phaser.Scene {
     this.mapScale = options.mapScale ?? 1;
     this.includeOltenia = options.includeOltenia ?? (options.player === 'oltenia' || this.mapScale > 1);
     this.commandSink = options.commandSink;
+    this.online = options.online;
     this.initialSave = options.save;
     this.sfx = options.sound ?? new SoundEngine();
     this.onReturnToMenu = options.onReturnToMenu;
@@ -187,13 +195,14 @@ export class GameScene extends Phaser.Scene {
       this.taxed = save.taxed;
     } else {
       this.world = new World({
-        seed: 1600,
+        seed: this.online?.seed ?? 1600,
         mapScale: this.mapScale,
         includeOltenia: this.includeOltenia,
       });
       const activeFactions = this.world.includeOltenia ? PLAYABLE_FACTION_IDS : FACTION_IDS;
+      const humans = new Set<FactionId>([this.player, ...(this.online?.humanFactions ?? [])]);
       this.ais = activeFactions
-        .filter((f) => f !== this.player)
+        .filter((f) => !humans.has(f))
         .map((f) => new SkirmishAi(f, { attacks: !this.peaceful, difficulty: this.difficulty }));
     }
 
@@ -248,6 +257,7 @@ export class GameScene extends Phaser.Scene {
     this.hud.setPaused(this.paused);
     this.hud.setSpeed(this.speed);
     this.hud.setMuted(this.sfx.isMuted());
+    if (this.online) this.hud.setOnline(true);
 
     const map = this.world.map;
 
@@ -380,7 +390,11 @@ export class GameScene extends Phaser.Scene {
     });
 
     this.hud.toast(
-      save ? 'Partidă reluată.' : 'Atinge un țăran, apoi o pădure, ca să taie lemne.',
+      save
+        ? 'Partidă reluată.'
+        : this.online
+          ? `Partidă online: tu ești ${FACTIONS[this.player].name}. Atinge un țăran, apoi o pădure.`
+          : 'Atinge un țăran, apoi o pădure, ca să taie lemne.',
       this.time.now,
       save ? 3000 : undefined,
     );
@@ -434,17 +448,20 @@ export class GameScene extends Phaser.Scene {
   }
 
   private togglePause(): void {
+    if (this.online) return; // Everyone shares one clock in lockstep.
     this.paused = !this.paused;
     this.hud.setPaused(this.paused);
   }
 
   private cycleSpeed(): void {
+    if (this.online) return;
     this.speedIndex = (this.speedIndex + 1) % SPEEDS.length;
     this.hud.setSpeed(this.speed);
   }
 
   private persistSave(): boolean {
     if (this.abandoned) return false;
+    if (this.online) return false; // Online matches cannot be resumed alone.
     const cam = this.controls.center;
     return saveGame({
       version: 1,
@@ -468,6 +485,25 @@ export class GameScene extends Phaser.Scene {
     this.hud.toast(ok ? 'Partidă salvată.' : 'Nu s-a putut salva.', this.time.now, 2500);
   }
 
+  /** Online: say so when the relay has kept us waiting for other players a while. */
+  private trackStall(stalled: boolean, time: number): void {
+    if (!this.online) return;
+    if (!stalled) {
+      this.stalledSince = null;
+      return;
+    }
+    if (this.stalledSince === null) this.stalledSince = time;
+    // Short-lived and refreshed while waiting, so it fades on its own once turns flow again.
+    else if (time - this.stalledSince > 1500 && time >= this.noticeUntil) this.hud.toast('Așteptăm ceilalți jucători…', time, 700);
+  }
+
+  /** Show a message from outside the scene (e.g. the network layer). */
+  notify(text: string, ms = 6000): void {
+    if (!this.hud) return;
+    this.noticeUntil = this.time.now + ms;
+    this.hud.toast(text, this.time.now, ms);
+  }
+
   /** Opening shot: the player's court, at a zoom that suits the screen. */
   private frameStart(): void {
     const shortSide = Math.min(this.scale.width, this.scale.height);
@@ -487,8 +523,12 @@ export class GameScene extends Phaser.Scene {
       // Fixed-step simulation, decoupled from the display's frame rate.
       const stepMs = Math.min(delta, MAX_FRAME_MS) * this.speed;
       this.accumulator = Math.min(this.accumulator + stepMs, TICK_MS * 10);
+      let stalled = false;
       while (this.accumulator >= TICK_MS) {
-        if (this.commandSink && !this.commandSink.beforeStep(this.world)) break;
+        if (this.commandSink && !this.commandSink.beforeStep(this.world)) {
+          stalled = true;
+          break;
+        }
         this.world.step();
         this.commandSink?.afterStep(this.world);
         if (this.world.tick % AI_THINK_EVERY === 0) for (const ai of this.ais) ai.think(this.world);
@@ -498,6 +538,7 @@ export class GameScene extends Phaser.Scene {
         this.accumulator -= TICK_MS;
       }
       for (const event of this.world.drainEvents()) this.handleEvent(event, time);
+      this.trackStall(stalled, time);
     }
     const alpha = this.accumulator / TICK_MS;
 
