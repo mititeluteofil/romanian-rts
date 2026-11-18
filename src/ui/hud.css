@@ -267,6 +267,9 @@ body {
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px;
+  max-height: 36vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   pointer-events: auto;
 }
 

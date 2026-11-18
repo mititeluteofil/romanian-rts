@@ -1,6 +1,6 @@
 import { DIFFICULTY_LABELS, type AiSnapshot, type Difficulty } from './ai/skirmish';
 import { ERAS } from './data/eras';
-import { FACTION_IDS, FACTIONS, type FactionId } from './data/factions';
+import { FACTIONS, PLAYABLE_FACTION_IDS, type FactionId } from './data/factions';
 import { TICK_RATE, type WorldSnapshot } from './sim/world';
 
 export const SAVE_KEY = 'unirea.save.v1';
@@ -37,7 +37,7 @@ export function loadGame(): SaveGame | null {
     const parsed = JSON.parse(raw) as Partial<SaveGame>;
     if (
       parsed.version !== 1 ||
-      !FACTION_IDS.includes(parsed.player as FactionId) ||
+      !PLAYABLE_FACTION_IDS.includes(parsed.player as FactionId) ||
       !parsed.world ||
       parsed.world.version !== 1 ||
       !Array.isArray(parsed.ais) ||

@@ -38,6 +38,8 @@ export interface BuildingDef {
   readonly only?: FactionId;
   /** Has to stand next to water. */
   readonly needsWater?: boolean;
+  /** How many villagers (`taran`) can take shelter inside this defensive building. */
+  readonly garrisonCap?: number;
   readonly description: string;
 }
 
@@ -52,7 +54,8 @@ export const BUILDINGS: Readonly<Record<BuildingKind, BuildingDef>> = {
     blocks: true,
     trains: ['taran', 'iscoada'],
     era: 0,
-    description: 'Aici se aduc lemnele și prunele, de aici vin țăranii și tot aici se schimbă vremurile. Dacă pică, ai pierdut.',
+    garrisonCap: 6,
+    description: 'Aici se aduc lemnele și prunele, de aici vin țăranii și tot aici se pot adăposti șase țărani ca să tragă în dușmani.',
   },
   livada: {
     kind: 'livada',
@@ -124,7 +127,8 @@ export const BUILDINGS: Readonly<Record<BuildingKind, BuildingDef>> = {
     blocks: true,
     trains: [],
     era: 0,
-    description: 'Trage singur în dușmanii și ienicerii care se apropie.',
+    garrisonCap: 4,
+    description: 'Trage singur în dușmani; încap patru țărani la adăpost ca să tragă și mai tare.',
   },
   zid: {
     kind: 'zid',

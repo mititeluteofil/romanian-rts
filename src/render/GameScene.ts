@@ -256,17 +256,26 @@ export class GameScene extends Phaser.Scene {
     // Unit and building art, per faction
     for (const faction of Object.values(FACTIONS)) {
       for (const kind of UNIT_KINDS) {
-        const sheet = this.textures.addCanvas(`${kind}-${faction.id}`, buildUnitSheet(faction, kind));
-        UNIT_FRAMES.forEach((name, i) => sheet?.add(name, 0, i * TILE, 0, TILE, TILE));
+        const key = `${kind}-${faction.id}`;
+        if (!this.textures.exists(key)) {
+          const sheet = this.textures.addCanvas(key, buildUnitSheet(faction, kind));
+          UNIT_FRAMES.forEach((name, i) => sheet?.add(name, 0, i * TILE, 0, TILE, TILE));
+        }
       }
       for (const def of Object.values(BUILDINGS)) {
         if (def.kind === 'curte') continue;
-        this.textures.addCanvas(`${def.kind}-${faction.id}`, buildBuildingTexture(def.kind, def.size, faction));
+        const key = `${def.kind}-${faction.id}`;
+        if (!this.textures.exists(key)) {
+          this.textures.addCanvas(key, buildBuildingTexture(def.kind, def.size, faction));
+        }
       }
       // The court changes its face with the times.
       for (let look = 0; look < COURT_LOOK_COUNT; look++) {
-        const canvas = buildBuildingTexture('curte', BUILDINGS.curte.size, faction, look);
-        this.textures.addCanvas(`curte-${faction.id}-${look}`, canvas);
+        const key = `curte-${faction.id}-${look}`;
+        if (!this.textures.exists(key)) {
+          const canvas = buildBuildingTexture('curte', BUILDINGS.curte.size, faction, look);
+          this.textures.addCanvas(key, canvas);
+        }
       }
     }
     this.ground = this.add.graphics().setDepth(5);
@@ -321,6 +330,10 @@ export class GameScene extends Phaser.Scene {
           e.preventDefault();
           this.sfx.unlock();
           this.cycleIdlePeasant();
+        } else if (e.code === 'KeyG') {
+          e.preventDefault();
+          this.sfx.unlock();
+          this.handleGarrisonShortcut();
         } else if (e.code === 'Digit1' || e.code === 'Digit2' || e.code === 'Digit3') {
           const group = Number(e.code.slice(5));
           this.sfx.unlock();
@@ -461,7 +474,9 @@ export class GameScene extends Phaser.Scene {
       const stepMs = Math.min(delta, MAX_FRAME_MS) * this.speed;
       this.accumulator = Math.min(this.accumulator + stepMs, TICK_MS * 10);
       while (this.accumulator >= TICK_MS) {
+        if (this.commandSink && !this.commandSink.beforeStep(this.world)) break;
         this.world.step();
+        this.commandSink?.afterStep(this.world);
         if (this.world.tick % AI_THINK_EVERY === 0) for (const ai of this.ais) ai.think(this.world);
         if (this.world.tick % AUTOSAVE_TICKS === 0 && this.world.winner === null && !this.lost) {
           this.persistSave();
@@ -536,6 +551,22 @@ export class GameScene extends Phaser.Scene {
       case 'full':
         this.speak(this.world.getUnit(event.unitId), 'full', time);
         break;
+      case 'garrisoned': {
+        const b = this.world.getBuilding(event.buildingId);
+        if (b?.faction === this.player) {
+          this.hud.say(`b${b.id}`, `La adăpost! (${this.world.garrisonCount(b)}/${this.world.garrisonCap(b)})`, time);
+          this.sfx.play('order');
+        }
+        break;
+      }
+      case 'ungarrisoned': {
+        const b = this.world.getBuilding(event.buildingId);
+        if (b?.faction === this.player) {
+          this.hud.say(`b${b.id}`, 'Hai înapoi la treabă!', time);
+          this.sfx.play('select');
+        }
+        break;
+      }
       case 'ability':
         if (event.ability === 'taunt') {
           if (event.faction === this.player) this.sfx.play('taunt');
@@ -814,6 +845,26 @@ export class GameScene extends Phaser.Scene {
     if (!building.done) {
       const total = Math.floor((def.buildTicks * FACTIONS[building.faction].buildTimePercent) / 100);
       this.drawBar(x + 2, y - 5, side - 4, total > 0 ? 1 - building.buildLeft / total : 1, 0xfff176);
+    } else if (building.researching && (building.researchLeft ?? 0) > 0) {
+      const tech = TECHS[building.researching];
+      const total = Math.floor((tech.researchTicks * FACTIONS[building.faction].buildTimePercent) / 100);
+      this.drawBar(x + 2, y - 5, side - 4, total > 0 ? 1 - (building.researchLeft ?? 0) / total : 1, 0x64b5f6);
+    } else if (building.advanceLeft > 0) {
+      const next = ERAS[this.world.era[building.faction] + 1];
+      const total = next ? Math.floor((next.advanceTicks * FACTIONS[building.faction].buildTimePercent) / 100) : 1;
+      this.drawBar(x + 2, y - 5, side - 4, total > 0 ? 1 - building.advanceLeft / total : 1, 0x64b5f6);
+    }
+    const garrisoned = this.world.garrisonCount(building);
+    if (building.done && garrisoned > 0) {
+      // Gold shelter pips showing how many villagers are garrisoned inside.
+      for (let i = 0; i < garrisoned; i++) {
+        const px = x + 3 + i * 5;
+        const py = y - 14;
+        this.top.fillStyle(0x1b1b1b, 1);
+        this.top.fillRect(px - 1, py - 1, 5, 5);
+        this.top.fillStyle(0xf2c230, 1);
+        this.top.fillRect(px, py, 3, 3);
+      }
     }
     if (building.done && building.kind === 'cazan' && building.distillLeft > 0) {
       // Animated firebox glow and rising steam puffs from the still.
@@ -1035,11 +1086,17 @@ export class GameScene extends Phaser.Scene {
     const building = this.selectedBuilding === null ? undefined : world.getBuilding(this.selectedBuilding);
     if (!building) return 'Nimic ales';
     const whose = building.faction === this.player ? '' : ` (${FACTIONS[building.faction].name})`;
-    const title = `${this.buildingName(building)}${whose} — ${building.hp}/${building.maxHp}`;
+    const cap = world.garrisonCap(building);
+    const inside = world.garrisonCount(building);
+    const shelterInfo = cap > 0 && (inside > 0 || building.kind === 'turn') ? ` · adăpost ${inside}/${cap}` : '';
+    const title = `${this.buildingName(building)}${whose} — ${building.hp}/${building.maxHp}${shelterInfo}`;
     if (building.faction !== this.player) return title;
     if (!building.done) return `${title} — se face`;
     if (building.advanceLeft > 0) {
       return `${title} — se schimbă vremurile (${Math.ceil(building.advanceLeft / TICK_RATE)} s)`;
+    }
+    if (building.researching && (building.researchLeft ?? 0) > 0) {
+      return `${title} — cercetează ${TECHS[building.researching].name} (${Math.ceil((building.researchLeft ?? 0) / TICK_RATE)} s)`;
     }
     if (building.queue.length > 0) return `${title} — ${building.queue.length} la rând`;
     if (building.kind === 'livada') {
@@ -1098,7 +1155,16 @@ export class GameScene extends Phaser.Scene {
     }
 
     const buttons: ActionButton[] = [];
-    if (hasPeasant) buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: true });
+    if (hasPeasant) {
+      buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: true });
+      const hasShelter = world.buildings.some((b) => world.canGarrison(player, b));
+      buttons.push({
+        id: 'garrison:nearest',
+        label: 'La adăpost!',
+        detail: 'Turn / Curte',
+        enabled: hasShelter,
+      });
+    }
     if (fightersSelected > 0) {
       buttons.push({
         id: 'mode:attackMove',
@@ -1110,6 +1176,28 @@ export class GameScene extends Phaser.Scene {
 
     const building = this.selectedBuilding === null ? undefined : world.getBuilding(this.selectedBuilding);
     if (building && building.faction === player) {
+      const cap = world.garrisonCap(building);
+      const inside = world.garrisonCount(building);
+      if (building.done && cap > 0) {
+        const freePeasants = world.units.some((u) => u.faction === player && u.kind === 'taran');
+        if (inside < cap && freePeasants) {
+          buttons.push({
+            id: 'garrison:bell',
+            label: 'Cheamă la adăpost',
+            detail: `${inside}/${cap} înăuntru`,
+            enabled: true,
+          });
+        }
+        if (inside > 0) {
+          buttons.push({
+            id: 'ungarrison',
+            label: 'Ieșiți din adăpost',
+            detail: `${inside} ${inside === 1 ? 'țăran' : 'țărani'}`,
+            enabled: true,
+            primary: true,
+          });
+        }
+      }
       for (const kind of world.trainable(building)) {
         const cost = world.unitCost(player, kind);
         const price = cost.lemn > 0 ? `${cost.prune} ${this.food}, ${cost.lemn} lemn` : `${cost.prune} ${this.food}`;
@@ -1273,6 +1361,17 @@ export class GameScene extends Phaser.Scene {
       this.attackMoveMode = false;
       if (this.rallyMode) this.hud.toast('Atinge pe hartă locul de adunare.', this.time.now);
       else this.hud.hideToast();
+    } else if (id === 'garrison:nearest') {
+      const peasants = this.selected().filter((u) => u.kind === 'taran');
+      if (peasants.length > 0) {
+        this.issue({ type: 'garrison', faction: player, unitIds: peasants.map((u) => u.id) });
+        this.sfx.play('order');
+        this.speak(peasants[0], 'move', this.time.now);
+      }
+    } else if (id === 'garrison:bell' && building !== null) {
+      this.ringTownBell(building);
+    } else if (id === 'ungarrison' && building !== null) {
+      this.issue({ type: 'ungarrison', faction: player, buildingId: building });
     } else if (id === 'queue:cancel' && building !== null) {
       this.issue({ type: 'cancelQueue', faction: player, buildingId: building });
     } else if (id.startsWith('research:') && building !== null) {
@@ -1378,6 +1477,44 @@ export class GameScene extends Phaser.Scene {
     this.hud.hideToast();
   }
 
+  private handleGarrisonShortcut(): void {
+    if (this.world.winner !== null || this.lost) return;
+    const peasants = this.selected().filter((u) => u.kind === 'taran');
+    if (peasants.length > 0) {
+      this.handleAction('garrison:nearest');
+      return;
+    }
+    if (this.selectedBuilding !== null) {
+      const b = this.world.getBuilding(this.selectedBuilding);
+      if (b && b.faction === this.player && this.world.garrisonCap(b) > 0) {
+        if (this.world.garrisonCount(b) > 0) this.handleAction('ungarrison');
+        else this.handleAction('garrison:bell');
+      }
+    }
+  }
+
+  private ringTownBell(buildingId: number): void {
+    const b = this.world.getBuilding(buildingId);
+    if (!b || !this.world.canGarrison(this.player, b)) return;
+    const room = this.world.garrisonCap(b) - this.world.garrisonCount(b);
+    if (room <= 0) return;
+    const size = BUILDINGS[b.kind].size;
+    const cx = (b.tx + size / 2) * SUB;
+    const cy = (b.ty + size / 2) * SUB;
+    const peasants = this.world.units
+      .filter((u) => u.faction === this.player && u.kind === 'taran')
+      .sort((a, c) => Math.hypot(a.x - cx, a.y - cy) - Math.hypot(c.x - cx, c.y - cy) || a.id - c.id)
+      .slice(0, room);
+    if (peasants.length === 0) return;
+    this.issue({
+      type: 'garrison',
+      faction: this.player,
+      unitIds: peasants.map((u) => u.id),
+      buildingId: b.id,
+    });
+    this.sfx.play('order');
+  }
+
   private handleTap(worldX: number, worldY: number): void {
     const now = this.time.now;
     if (this.world.winner !== null || this.lost) return;
@@ -1417,7 +1554,7 @@ export class GameScene extends Phaser.Scene {
         this.speak(unit, 'select', now); // not yours — he just answers back
         return;
       }
-      this.world.issue({ type: 'attack', faction: this.player, unitIds, targetId: unit.id });
+      this.issue({ type: 'attack', faction: this.player, unitIds, targetId: unit.id });
       this.sfx.play('order');
       this.speakAttack(this.world.getUnit(unitIds[0]!), unit.faction, now);
       this.hud.hideToast();
@@ -1450,18 +1587,19 @@ export class GameScene extends Phaser.Scene {
     }
 
     const kind = this.world.describeTarget(this.player, tx, ty);
-    if (building && kind === 'move') {
+    const hasPeasantSelected = this.selected().some((u) => u.kind === 'taran');
+    if (building && (kind === 'move' || (kind === 'garrison' && !hasPeasantSelected))) {
       // A finished building of yours: look at it instead of walking into the wall.
       this.sfx.play('select');
       this.selectedUnits.clear();
       this.selectedBuilding = building.id;
       return;
     }
-    this.world.issue({ type: 'act', faction: this.player, unitIds, tx, ty });
+    this.issue({ type: 'act', faction: this.player, unitIds, tx, ty });
     this.sfx.play('order');
     this.markers.push({ x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, bornAt: now });
     if (kind === 'attack' && building) this.speakAttack(this.world.getUnit(unitIds[0]!), building.faction, now);
-    else this.speak(this.world.getUnit(unitIds[0]!), kind, now);
+    else this.speak(this.world.getUnit(unitIds[0]!), kind === 'garrison' ? 'move' : kind, now);
     this.hud.hideToast();
   }
 
