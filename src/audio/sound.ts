@@ -89,9 +89,9 @@ const VOICE_CLIPS: Readonly<Partial<Record<FactionId, Readonly<Partial<Record<Vo
     win: ['moldova/victorie.mp3'],
   },
   ardeal: {
-    select: ['ardeal/neamtu.mp3', 'ardeal/ce-cauti.mp3', 'ardeal/inainte-munca.mp3'],
+    select: ['ardeal/nem-tudom.mp3', 'ardeal/ce-cauti.mp3', 'ardeal/inainte-munca.mp3'],
     taunt: ['ardeal/ce-cauti.mp3'],
-    scandal: ['ardeal/neamtu.mp3', 'ardeal/nu-fac-nimic.mp3'],
+    scandal: ['ardeal/nem-tudom.mp3', 'ardeal/nu-fac-nimic.mp3'],
     drink: ['ardeal/palinca-hai.mp3'],
     build: ['ardeal/palinca-hai.mp3', 'ardeal/maine-cafa.mp3', 'ardeal/inainte-munca.mp3'],
     move: ['ardeal/maine-cafa.mp3', 'ardeal/inainte-munca.mp3'],
@@ -146,7 +146,7 @@ export function clipForLine(ctx: VoiceLineContext, avoidClip?: string, roll = Ma
     if (lower.includes('șase saci')) return 'moldova/sase-saci.mp3';
     if (lower.includes('munc')) return 'moldova/munca-hai.mp3';
   } else if (ctx.faction === 'ardeal') {
-    if (lower.includes('neamtu')) return 'ardeal/neamtu.mp3';
+    if (lower.includes('nem tudom')) return 'ardeal/nem-tudom.mp3';
     if (lower.includes('cauți')) return 'ardeal/ce-cauti.mp3';
     if (lower.includes('înainte de munc')) return 'ardeal/inainte-munca.mp3';
     if (lower.includes('pălinc') || lower.includes('cunoaștem')) return 'ardeal/palinca-hai.mp3';

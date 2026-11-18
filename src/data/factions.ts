@@ -162,7 +162,7 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
         'Zî, mă.',
         'Amu’ ce mai vrei?',
         'No, servus.',
-        'Neamtu Doamne.',
+        'Nem tudom.',
         'Atunci ce cauți pe harta mea?!',
       ],
       move: [

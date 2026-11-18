@@ -1064,6 +1064,7 @@ describe('saves, crowd fan-out and voice hook', () => {
     expect(clipForLine({ faction: 'ardeal', kind: 'build', text: 'No, numai bine bem o pălincă…' })).toBe(
       'ardeal/palinca-hai.mp3',
     );
+    expect(clipForLine({ faction: 'ardeal', kind: 'select', text: 'Nem tudom.' })).toBe('ardeal/nem-tudom.mp3');
     expect(clipForLine({ faction: 'ardeal', kind: 'select', text: 'Atunci ce cauți pe harta mea?!' })).toBe(
       'ardeal/ce-cauti.mp3',
     );
