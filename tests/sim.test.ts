@@ -7,7 +7,8 @@ import { GameMap, generateRomania, latToY, lonToX, placeTile, Terrain } from '..
 import { findPath, nearestPassable, nearestTile } from '../src/sim/pathfinding';
 import { AI_THINK_EVERY, SkirmishAi } from '../src/ai/skirmish';
 import { ERAS, LAST_ERA } from '../src/data/eras';
-import { FACTION_IDS, RAIDERS } from '../src/data/factions';
+import { FACTION_IDS, isRival, PLAYABLE_FACTION_IDS, RAIDERS } from '../src/data/factions';
+import { LockstepSink, TURN_TICKS, type RelayClientMsg } from '../src/net/lockstep';
 import {
   BRIBE_PRUNE,
   CAPITAL_TAX,
@@ -1095,5 +1096,291 @@ describe('saves, crowd fan-out and voice hook', () => {
       return Infinity;
     };
     expect(playToFirstAttack('greu')).toBeLessThan(playToFirstAttack('usor'));
+  });
+});
+
+describe('milestone 7 and extra features', () => {
+  it('generates a 1.5x bigger map with 5 principalities including Oltenia', () => {
+    const world = new World({ seed: 1600, mapScale: 1.5, includeOltenia: true });
+    expect(world.map.width).toBe(216);
+    expect(world.map.height).toBe(156);
+    for (const id of PLAYABLE_FACTION_IDS) {
+      const court = world.courtOf(id);
+      expect(court).toBeDefined();
+      expect(world.units.filter((u) => u.faction === id && u.kind === 'taran').length).toBeGreaterThanOrEqual(3);
+    }
+
+    // Oltenia is rival to everyone ("Oltenii cu toată lumea")
+    for (const other of FACTION_IDS) {
+      expect(isRival('oltenia', other)).toBe(true);
+      expect(isRival(other, 'oltenia')).toBe(true);
+    }
+
+    // Oltenia's Iureș ability grants combat buff and goes on cooldown
+    world.issue({ type: 'ability', faction: 'oltenia' });
+    world.step();
+    expect(world.buff.oltenia).toBeGreaterThan(0);
+    expect(world.abilityCooldown.oltenia).toBeGreaterThan(0);
+  });
+
+  it('supports defensive buildings: casa, han passive healing, turn auto-fire, zid & poarta buildLine', () => {
+    const map = mapFromRows([
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+      '....................',
+    ]);
+    const world = new World({ seed: 1, map });
+    world.placeBuilding('curte', 'ardeal', 1, 1, true);
+    world.placeBuilding('curte', 'moldova', 15, 1, true);
+    const builder = world.spawnUnit('ardeal', 4, 2, 'taran');
+    const enemy = world.spawnUnit('moldova', 13, 3, 'ostas');
+    world.stock.ardeal.lemn = 500;
+    world.era.ardeal = 1;
+    const baseCap = world.unitCap('ardeal');
+
+    // Build a casa (+4 cap) and a han (+6 cap)
+    world.issue({ type: 'build', faction: 'ardeal', unitIds: [builder.id], kind: 'casa', tx: 5, ty: 1 });
+    for (let i = 0; i < 120; i++) world.step();
+    expect(world.unitCap('ardeal')).toBe(baseCap + 4);
+
+    world.issue({ type: 'build', faction: 'ardeal', unitIds: [builder.id], kind: 'han', tx: 8, ty: 1 });
+    for (let i = 0; i < 160; i++) world.step();
+    expect(world.unitCap('ardeal')).toBe(baseCap + 10);
+
+    // Han passively heals damaged friendly units nearby
+    builder.hp = builder.maxHp - 10;
+    for (let i = 0; i < 30; i++) world.step();
+    expect(builder.hp).toBeGreaterThan(builder.maxHp - 10);
+
+    // Build a line of 2 walls + 1 gate
+    world.issue({
+      type: 'buildLine',
+      faction: 'ardeal',
+      unitIds: [builder.id],
+      kind: 'zid',
+      tiles: [
+        [5, 5],
+        [6, 5],
+      ],
+    });
+    world.issue({
+      type: 'build',
+      faction: 'ardeal',
+      unitIds: [],
+      kind: 'poarta',
+      tx: 7,
+      ty: 5,
+    });
+    for (let i = 0; i < 150; i++) world.step();
+    expect(world.buildings.filter((b) => b.kind === 'zid' && b.done).length).toBe(2);
+
+    // Friendly unit can pass through its own poarta (tx=7, ty=5), enemy cannot
+    expect(world.map.isPassable(7, 5, 1)).toBe(true); // 1 = ardeal
+    expect(world.map.isPassable(7, 5, 2)).toBe(false); // 2 = moldova
+
+    // Watchtower (turn) automatically fires at nearby enemy units
+    world.issue({ type: 'build', faction: 'ardeal', unitIds: [builder.id], kind: 'turn', tx: 11, ty: 2 });
+    for (let i = 0; i < 200; i++) world.step();
+    const freshEnemy = world.spawnUnit('moldova', 13, 3, 'ostas');
+    const hpBefore = freshEnemy.hp;
+    for (let i = 0; i < 30; i++) world.step();
+    expect(freshEnemy.hp).toBeLessThan(hpBefore);
+    expect(enemy.hp).toBeLessThanOrEqual(0);
+  });
+
+  it('implements Stegar ("Ăla-i cu steagul!") zero-damage rule, aura buff, and Iscoadă speed', () => {
+    const map = mapFromRows([
+      '............',
+      '............',
+      '............',
+      '............',
+      '............',
+      '............',
+    ]);
+    const world = new World({ seed: 1, map });
+    world.placeBuilding('curte', 'ardeal', 1, 1, true);
+    world.placeBuilding('curte', 'moldova', 8, 1, true);
+    const camp = world.placeBuilding('tabara', 'ardeal', 4, 1, true);
+    world.stock.ardeal.lemn = 300;
+    world.stock.ardeal.prune = 300;
+
+    world.issue({ type: 'train', faction: 'ardeal', buildingId: camp.id, kind: 'stegar' });
+    world.issue({ type: 'train', faction: 'ardeal', buildingId: camp.id, kind: 'iscoada' });
+    for (let i = 0; i < 220; i++) world.step();
+    world.issue({ type: 'train', faction: 'ardeal', buildingId: camp.id, kind: 'ostas' });
+    for (let i = 0; i < 160; i++) world.step();
+
+    const stegar = world.units.find((u) => u.faction === 'ardeal' && u.kind === 'stegar')!;
+    const iscoada = world.units.find((u) => u.faction === 'ardeal' && u.kind === 'iscoada')!;
+    const ostas = world.units.find((u) => u.faction === 'ardeal' && u.kind === 'ostas')!;
+    expect(stegar).toBeDefined();
+    expect(iscoada).toBeDefined();
+    expect(iscoada.speed).toBeGreaterThan(ostas.speed);
+
+    // Park iscoada far away so only ostas is near stegar
+    iscoada.x = 1 * SUB;
+    iscoada.y = 1 * SUB;
+
+    // When friendly fighter (ostas) is nearby, stegar deals 0 damage ("Ăla-i cu steagul!")
+    const enemy = world.spawnUnit('moldova', 10, 4, 'taran');
+    stegar.x = enemy.x - SUB;
+    stegar.y = enemy.y;
+    ostas.x = stegar.x - 2 * SUB;
+    ostas.y = stegar.y;
+    ostas.order = { type: 'move' };
+    const hpBefore = enemy.hp;
+    world.issue({ type: 'attack', faction: 'ardeal', unitIds: [stegar.id], targetId: enemy.id });
+    for (let i = 0; i < 12; i++) {
+      ostas.x = stegar.x - 2 * SUB;
+      ostas.y = stegar.y;
+      ostas.order = { type: 'move' };
+      iscoada.x = 1 * SUB;
+      iscoada.y = 1 * SUB;
+      iscoada.order = { type: 'move' };
+      world.step();
+    }
+    expect(enemy.hp).toBe(hpBefore);
+
+    // Move friendly fighters far away: cornered stegar swings his flagpole for 3 damage
+    for (let i = 0; i < 15; i++) {
+      ostas.x = 1 * SUB;
+      ostas.y = 1 * SUB;
+      ostas.order = { type: 'move' };
+      iscoada.x = 1 * SUB;
+      iscoada.y = 1 * SUB;
+      iscoada.order = { type: 'move' };
+      world.step();
+    }
+    expect(enemy.hp).toBeLessThan(hpBefore);
+  });
+
+  it('researches technologies and sabotage upgrades (topor, zidarie, dosar, para, pana_curent)', () => {
+    const world = new World({ seed: 1600 });
+    world.stock.ardeal.lemn = 500;
+    world.stock.ardeal.prune = 500;
+    world.era.ardeal = 1;
+    const court = world.courtOf('ardeal')!;
+    const maxHpBefore = court.maxHp;
+
+    // Research zidarie (+25% building HP)
+    world.issue({ type: 'research', faction: 'ardeal', buildingId: court.id, techId: 'zidarie' });
+    for (let i = 0; i < 160; i++) world.step();
+    expect(world.hasTech('ardeal', 'zidarie')).toBe(true);
+    expect(court.maxHp).toBe(Math.floor((maxHpBefore * 125) / 100));
+
+    // Research topor (+2 carry capacity)
+    world.issue({ type: 'research', faction: 'ardeal', buildingId: court.id, techId: 'topor' });
+    for (let i = 0; i < 140; i++) world.step();
+    expect(world.hasTech('ardeal', 'topor')).toBe(true);
+
+    // Advance era and test sabotage techs (para, dosar, pana_curent)
+    world.era.ardeal = 4;
+    world.issue({
+      type: 'research',
+      faction: 'ardeal',
+      buildingId: court.id,
+      techId: 'para',
+      targetFaction: 'moldova',
+    });
+    for (let i = 0; i < 150; i++) world.step();
+    expect(world.haraci.moldova.amount).toBeGreaterThanOrEqual(40);
+
+    world.issue({
+      type: 'research',
+      faction: 'ardeal',
+      buildingId: court.id,
+      techId: 'dosar',
+      targetFaction: 'moldova',
+    });
+    for (let i = 0; i < 150; i++) world.step();
+    expect(world.debuffs.moldova.dosar).toBeGreaterThan(0);
+
+    world.issue({
+      type: 'research',
+      faction: 'ardeal',
+      buildingId: court.id,
+      techId: 'pana_curent',
+      targetFaction: 'moldova',
+    });
+    for (let i = 0; i < 150; i++) world.step();
+    expect(world.debuffs.moldova.panaCurent).toBeGreaterThan(0);
+  });
+
+  it('supports rally points, cancelQueue refunds, attackMove, and peasant building repair', () => {
+    const world = new World({ seed: 1600 });
+    const court = world.courtOf('ardeal')!;
+    world.stock.ardeal.prune = 200;
+    world.stock.ardeal.lemn = 200;
+
+    // Set rally point on court
+    world.issue({ type: 'rally', faction: 'ardeal', buildingId: court.id, tx: court.tx + 4, ty: court.ty + 4 });
+    world.step();
+    expect(court.rally).toEqual({ tx: court.tx + 4, ty: court.ty + 4 });
+
+    // Queue 2 peasants, then cancelQueue both and verify full refund
+    const pruneBefore = world.stock.ardeal.prune;
+    world.issue({ type: 'train', faction: 'ardeal', buildingId: court.id, kind: 'taran' });
+    world.issue({ type: 'train', faction: 'ardeal', buildingId: court.id, kind: 'taran' });
+    world.step();
+    expect(court.queue.length).toBe(2);
+    expect(world.stock.ardeal.prune).toBeLessThan(pruneBefore);
+
+    world.issue({ type: 'cancelQueue', faction: 'ardeal', buildingId: court.id });
+    world.issue({ type: 'cancelQueue', faction: 'ardeal', buildingId: court.id });
+    world.step();
+    expect(court.queue.length).toBe(0);
+    expect(world.stock.ardeal.prune).toBe(pruneBefore);
+
+    // Damage court and order peasant to repair it
+    court.hp = court.maxHp - 50;
+    const peasant = world.units.find((u) => u.faction === 'ardeal' && u.kind === 'taran')!;
+    expect(world.describeTarget('ardeal', court.tx, court.ty)).toBe('build');
+    world.issue({ type: 'act', faction: 'ardeal', unitIds: [peasant.id], tx: court.tx, ty: court.ty });
+    for (let i = 0; i < 60; i++) world.step();
+    expect(court.hp).toBe(court.maxHp);
+  });
+
+  it('keeps two lockstep multiplayer worlds in bit-identical sync across turns', () => {
+    const worldA = new World({ seed: 1600 });
+    const worldB = new World({ seed: 1600 });
+    const packetsA: RelayClientMsg[] = [];
+    const packetsB: RelayClientMsg[] = [];
+    const sinkA = new LockstepSink((msg) => packetsA.push(msg));
+    const sinkB = new LockstepSink((msg) => packetsB.push(msg));
+
+    const courtA = worldA.courtOf('ardeal')!;
+    const courtB = worldB.courtOf('moldova')!;
+    sinkA.send({ type: 'train', faction: 'ardeal', buildingId: courtA.id, kind: 'taran' });
+    sinkB.send({ type: 'train', faction: 'moldova', buildingId: courtB.id, kind: 'taran' });
+
+    for (let tick = 0; tick < TURN_TICKS * 10; tick++) {
+      expect(sinkA.beforeStep(worldA)).toBe(true);
+      expect(sinkB.beforeStep(worldB)).toBe(true);
+      // Deliver any outbound turn packets submitted during beforeStep to the relay and broadcast back
+      while (packetsA.length > 0 && packetsB.length > 0) {
+        const pA = packetsA.shift()!;
+        const pB = packetsB.shift()!;
+        if (pA.type === 'turn' && pB.type === 'turn') {
+          const merged = [...pA.cmds, ...pB.cmds];
+          const desync = pA.hash !== undefined && pB.hash !== undefined && pA.hash !== pB.hash;
+          sinkA.receive({ type: 'turn', turn: pA.turn, cmds: merged, desync });
+          sinkB.receive({ type: 'turn', turn: pB.turn, cmds: merged, desync });
+        }
+      }
+      worldA.step();
+      worldB.step();
+      sinkA.afterStep();
+      sinkB.afterStep();
+    }
+    expect(sinkA.desynced).toBe(false);
+    expect(sinkB.desynced).toBe(false);
+    expect(worldA.checksum()).toBe(worldB.checksum());
   });
 });

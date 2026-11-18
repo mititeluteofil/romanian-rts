@@ -52,6 +52,8 @@ export class GameMap {
   readonly wood: Uint8Array;
   /** 1 where a building blocks movement. */
   readonly blocked: Uint8Array;
+  /** Faction code (1..6) of a finished or under-construction Gate on this tile, 0 if none. */
+  readonly gateOwner: Uint8Array;
 
   constructor(width: number, height: number) {
     this.width = width;
@@ -60,6 +62,7 @@ export class GameMap {
     this.regions = new Uint8Array(width * height);
     this.wood = new Uint8Array(width * height);
     this.blocked = new Uint8Array(width * height);
+    this.gateOwner = new Uint8Array(width * height);
   }
 
   inBounds(x: number, y: number): boolean {
@@ -79,15 +82,17 @@ export class GameMap {
     return (this.regions[y * this.width + x] ?? Region.None) as Region;
   }
 
-  costAt(x: number, y: number): number {
+  costAt(x: number, y: number, forFactionCode?: number): number {
     if (!this.inBounds(x, y)) return 0;
     const i = y * this.width + x;
     if (this.blocked[i]) return 0;
+    const gate = this.gateOwner[i]!;
+    if (gate !== 0 && forFactionCode !== undefined && gate !== forFactionCode) return 0;
     return MOVE_COST[this.tiles[i]!] ?? 0;
   }
 
-  isPassable(x: number, y: number): boolean {
-    return this.costAt(x, y) > 0;
+  isPassable(x: number, y: number, forFactionCode?: number): boolean {
+    return this.costAt(x, y, forFactionCode) > 0;
   }
 }
 
@@ -98,21 +103,21 @@ export class GameMap {
 
 type Pt = readonly [number, number];
 
-export function lonToX(lon: number): number {
-  return (lon - LON_WEST) * TILES_PER_LON;
+export function lonToX(lon: number, scale = 1): number {
+  return (lon - LON_WEST) * TILES_PER_LON * scale;
 }
 
-export function latToY(lat: number): number {
-  return (LAT_NORTH - lat) * TILES_PER_LAT;
+export function latToY(lat: number, scale = 1): number {
+  return (LAT_NORTH - lat) * TILES_PER_LAT * scale;
 }
 
-function project(points: readonly LonLat[]): Pt[] {
-  return points.map(([lon, lat]) => [lonToX(lon), latToY(lat)] as const);
+function project(points: readonly LonLat[], scale = 1): Pt[] {
+  return points.map(([lon, lat]) => [lonToX(lon, scale), latToY(lat, scale)] as const);
 }
 
 /** Tile that contains a place. */
-export function placeTile(place: Place): { x: number; y: number } {
-  return { x: Math.floor(lonToX(place.at[0])), y: Math.floor(latToY(place.at[1])) };
+export function placeTile(place: Place, scale = 1): { x: number; y: number } {
+  return { x: Math.floor(lonToX(place.at[0], scale)), y: Math.floor(latToY(place.at[1], scale)) };
 }
 
 function insidePolygon(px: number, py: number, polygon: readonly Pt[]): boolean {
@@ -185,24 +190,28 @@ function fbm(seed: number, x: number, y: number): number {
  * from data/romania.ts; the seed only varies the forests and the ragged edge
  * of the mountains.
  */
-export function generateRomania(seed: number): GameMap {
-  const map = new GameMap(MAP_WIDTH, MAP_HEIGHT);
+export function generateRomania(seed: number, scale = 1): GameMap {
+  const width = scale === 1 ? MAP_WIDTH : Math.round(MAP_WIDTH * scale);
+  const height = scale === 1 ? MAP_HEIGHT : Math.round(MAP_HEIGHT * scale);
+  const map = new GameMap(width, height);
 
-  const border = project(BORDER);
-  const ardeal = project(ARDEAL_AREA);
-  const dobrogea = project(DOBROGEA_AREA);
-  const moldovaSouth = project(MOLDOVA_SOUTH_LINE);
-  const chains = MOUNTAINS.map((c) => ({ halfWidth: c.halfWidth, line: project(c.points) }));
-  const passes = PASSES.map((p) => project(p.line));
+  const border = project(BORDER, scale);
+  const ardeal = project(ARDEAL_AREA, scale);
+  const dobrogea = project(DOBROGEA_AREA, scale);
+  const moldovaSouth = project(MOLDOVA_SOUTH_LINE, scale);
+  const chains = MOUNTAINS.map((c) => ({ halfWidth: c.halfWidth * scale, line: project(c.points, scale) }));
+  const passes = PASSES.map((p) => project(p.line, scale));
   const rivers = RIVERS.map((r) => ({
-    halfWidth: r.halfWidth,
-    line: project(r.points),
-    fords: project(r.fords),
+    halfWidth: r.halfWidth * scale,
+    line: project(r.points, scale),
+    fords: project(r.fords, scale),
   }));
-  const borderRivers = BORDER_RIVERS.map((r) => project(r));
-  const seaX = lonToX(SEA_WEST_LON);
-  const seaY = latToY(SEA_NORTH_LAT);
-  const seaShoulderX = lonToX(29.78);
+  const borderRivers = BORDER_RIVERS.map((r) => project(r, scale));
+  const borderRiverHalf = BORDER_RIVER_HALF_WIDTH * scale;
+  const passHalf = PASS_HALF_WIDTH * scale;
+  const seaX = lonToX(SEA_WEST_LON, scale);
+  const seaY = latToY(SEA_NORTH_LAT, scale);
+  const seaShoulderX = lonToX(29.78, scale);
 
   for (let ty = 0; ty < map.height; ty++) {
     for (let tx = 0; tx < map.width; tx++) {
@@ -212,7 +221,7 @@ export function generateRomania(seed: number): GameMap {
 
       let onBorderRiver = false;
       for (const line of borderRivers) {
-        if (distSqToLine(px, py, line) <= BORDER_RIVER_HALF_WIDTH * BORDER_RIVER_HALF_WIDTH) {
+        if (distSqToLine(px, py, line) <= borderRiverHalf * borderRiverHalf) {
           onBorderRiver = true;
           break;
         }
@@ -243,7 +252,7 @@ export function generateRomania(seed: number): GameMap {
       for (const river of rivers) {
         if (distSqToLine(px, py, river.line) > river.halfWidth * river.halfWidth) continue;
         terrain = Terrain.Water;
-        const reach = river.halfWidth + 0.75;
+        const reach = river.halfWidth + 0.75 * scale;
         for (const ford of river.fords) {
           const dx = px - ford[0];
           const dy = py - ford[1];
@@ -257,22 +266,23 @@ export function generateRomania(seed: number): GameMap {
         let edge = Infinity;
         for (const chain of chains) {
           const d = distSqToLine(px, py, chain.line);
-          const reach = chain.halfWidth + 8;
+          const reach = chain.halfWidth + 8 * scale;
           if (d > reach * reach) continue;
           const e = Math.sqrt(d) - chain.halfWidth;
           if (e < edge) edge = e;
         }
         let inPass = false;
         for (const pass of passes) {
-          if (distSqToLine(px, py, pass) <= PASS_HALF_WIDTH * PASS_HALF_WIDTH) inPass = true;
+          if (distSqToLine(px, py, pass) <= passHalf * passHalf) inPass = true;
         }
-        const ragged = (hash2(seed, tx, ty) / 4294967296 - 0.5) * 0.9;
+        const ragged = (hash2(seed, tx, ty) / 4294967296 - 0.5) * 0.9 * scale;
         if (edge + ragged < 0 && !inPass) {
           terrain = Terrain.Mountain;
         } else {
           // Forests thin out away from the mountains; the plains are almost bare.
-          const threshold = edge < 3 ? 0.44 : edge < 8 ? 0.55 : 0.7;
-          terrain = fbm(seed ^ 0x5bd1e995, tx / 4, ty / 4) > threshold ? Terrain.Forest : Terrain.Grass;
+          const threshold = edge < 3 * scale ? 0.44 : edge < 8 * scale ? 0.55 : 0.7;
+          const noiseScale = 4 * scale;
+          terrain = fbm(seed ^ 0x5bd1e995, tx / noiseScale, ty / noiseScale) > threshold ? Terrain.Forest : Terrain.Grass;
         }
       }
 
@@ -281,9 +291,10 @@ export function generateRomania(seed: number): GameMap {
   }
 
   // Open ground around the towns so settlements have room to start.
+  const clearRadius = scale === 1 ? 3 : Math.round(3 * scale) + 1;
   for (const place of Object.values(PLACES)) {
-    const c = placeTile(place);
-    const r = 3;
+    const c = placeTile(place, scale);
+    const r = clearRadius;
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (dx * dx + dy * dy > r * r + 1 || !map.inBounds(c.x + dx, c.y + dy)) continue;

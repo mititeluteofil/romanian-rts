@@ -131,8 +131,9 @@ export function nearestPassable(
   x: number,
   y: number,
   taken?: ReadonlySet<number>,
+  forFactionCode?: number,
 ): number {
-  return nearestTile(map, x, y, (idx, tx, ty) => map.isPassable(tx, ty) && !taken?.has(idx));
+  return nearestTile(map, x, y, (idx, tx, ty) => map.isPassable(tx, ty, forFactionCode) && !taken?.has(idx));
 }
 
 /**
@@ -141,7 +142,14 @@ export function nearestPassable(
  * cannot be reached, returns the path to the reachable tile closest to it.
  * An empty array means "already there / nowhere better to go".
  */
-export function findPath(map: GameMap, sx: number, sy: number, gx: number, gy: number): number[] {
+export function findPath(
+  map: GameMap,
+  sx: number,
+  sy: number,
+  gx: number,
+  gy: number,
+  forFactionCode?: number,
+): number[] {
   if (!map.inBounds(sx, sy) || !map.inBounds(gx, gy)) return [];
   const w = map.width;
   const size = w * map.height;
@@ -178,9 +186,13 @@ export function findPath(map: GameMap, sx: number, sy: number, gx: number, gy: n
     for (const [dx, dy, base] of NEIGHBOURS) {
       const nx = cx + dx;
       const ny = cy + dy;
-      const cost = map.costAt(nx, ny);
+      const cost = map.costAt(nx, ny, forFactionCode);
       if (cost === 0) continue;
-      if (dx !== 0 && dy !== 0 && (!map.isPassable(cx + dx, cy) || !map.isPassable(cx, cy + dy))) {
+      if (
+        dx !== 0 &&
+        dy !== 0 &&
+        (!map.isPassable(cx + dx, cy, forFactionCode) || !map.isPassable(cx, cy + dy, forFactionCode))
+      ) {
         continue;
       }
       const n = ny * w + nx;

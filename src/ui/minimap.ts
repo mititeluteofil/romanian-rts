@@ -46,6 +46,7 @@ export class Minimap {
     this.map = world.map;
     canvas.width = this.map.width;
     canvas.height = this.map.height;
+    canvas.style.aspectRatio = `${this.map.width} / ${this.map.height}`;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('2D canvas is not available');
     this.ctx = ctx;

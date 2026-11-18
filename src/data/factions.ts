@@ -4,15 +4,18 @@
  * a new faction or a new joke never needs engine changes.
  */
 
-export type FactionId = 'ardeal' | 'moldova' | 'tara' | 'dobrogea' | 'otomani';
+export type FactionId = 'ardeal' | 'moldova' | 'tara' | 'dobrogea' | 'oltenia' | 'otomani';
 
-/** The principalities a person or the AI can play. */
+/** Classic four principalities (default 4-way setup). */
 export const FACTION_IDS: readonly FactionId[] = ['ardeal', 'moldova', 'tara', 'dobrogea'];
+
+/** All five playable principalities including Oltenia. */
+export const PLAYABLE_FACTION_IDS: readonly FactionId[] = ['ardeal', 'moldova', 'tara', 'oltenia', 'dobrogea'];
 
 /** Not playable: they only turn up when the tribute is late. */
 export const RAIDERS: FactionId = 'otomani';
 
-export const ALL_FACTION_IDS: readonly FactionId[] = [...FACTION_IDS, RAIDERS];
+export const ALL_FACTION_IDS: readonly FactionId[] = [...PLAYABLE_FACTION_IDS, RAIDERS];
 
 /** One fresh value per faction, for the simulation's per-faction tables. */
 export function perFaction<T>(make: (faction: FactionId) => T): Record<FactionId, T> {
@@ -21,13 +24,14 @@ export function perFaction<T>(make: (faction: FactionId) => T): Record<FactionId
     moldova: make('moldova'),
     tara: make('tara'),
     dobrogea: make('dobrogea'),
+    oltenia: make('oltenia'),
     otomani: make('otomani'),
   };
 }
 
-export type UnitKind = 'taran' | 'ostas' | 'smecher';
+export type UnitKind = 'taran' | 'ostas' | 'smecher' | 'stegar' | 'iscoada';
 
-/** Everyone except the peasants fights without being told to. */
+/** Everyone except the peasants marches with the army. */
 export function isFighter(kind: UnitKind): boolean {
   return kind !== 'taran';
 }
@@ -45,7 +49,7 @@ export interface UnitDef {
   readonly speedPercent?: number;
 }
 
-export type AbilityId = 'palinca' | 'taunt' | 'rezolva' | 'plaja' | 'none';
+export type AbilityId = 'palinca' | 'taunt' | 'rezolva' | 'plaja' | 'iures' | 'none';
 
 export interface AbilityDef {
   readonly id: AbilityId;
@@ -117,6 +121,35 @@ const SMECHER: UnitDef = {
   speedPercent: 130,
 };
 
+export const STEGAR: UnitDef = {
+  name: 'Stegar (Auraș)',
+  hp: 45,
+  damage: 0,
+  cooldown: 12,
+  costPrune: 20,
+  costLemn: 10,
+  trainTicks: 80,
+  speedPercent: 115,
+};
+
+export const ISCOADA: UnitDef = {
+  name: 'Iscoadă',
+  hp: 30,
+  damage: 3,
+  cooldown: 9,
+  costPrune: 12,
+  costLemn: 0,
+  trainTicks: 50,
+  speedPercent: 145,
+};
+
+/** Whether `attacker` gets the regional rivalry damage bonus against `victim` ("Oltenii cu toată lumea"). */
+export function isRival(attacker: FactionId, victim: FactionId): boolean {
+  if (attacker === victim || victim === RAIDERS || attacker === RAIDERS) return false;
+  if (attacker === 'oltenia' || victim === 'oltenia') return true;
+  return FACTIONS[attacker].rival === victim;
+}
+
 export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
   ardeal: {
     id: 'ardeal',
@@ -136,6 +169,7 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       moldova: 'Voi alergați, noi ajungem.',
       tara: 'Destul am plătit io pentru voi, miticilor.',
       dobrogea: 'No, venim la mare, da’ nu la plajă.',
+      oltenia: 'No, cu voi tot timpu’ îi grabă și harță.',
     },
     units: {
       taran: { name: 'Țăran', hp: 30, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
@@ -143,6 +177,8 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       ostas: { name: 'Plăieș', hp: 80, damage: 10, cooldown: 12, costPrune: 25, costLemn: 10, trainTicks: 120 },
       // Not from around here: dear, and he does not slow down for anybody.
       smecher: SMECHER,
+      stegar: STEGAR,
+      iscoada: ISCOADA,
     },
     ability: {
       id: 'palinca',
@@ -212,12 +248,15 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       ardeal: 'Până vă urniți voi, noi am gătat, wăi.',
       tara: 'Capitala trebuia să fie la Ieși, wăi!',
       dobrogea: 'Venim la mare, bre, cu tot cu sărmăluțe.',
+      oltenia: 'Băi oltenilor, cu toată lumea vă certați?!',
     },
     units: {
       taran: { name: 'Țăran', hp: 25, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
       // Free peasant with a sabre: cheap, quick, comes in numbers.
       ostas: { name: 'Răzeș', hp: 50, damage: 7, cooldown: 8, costPrune: 15, costLemn: 5, trainTicks: 70 },
       smecher: SMECHER,
+      stegar: STEGAR,
+      iscoada: ISCOADA,
     },
     ability: {
       id: 'taunt',
@@ -295,6 +334,7 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       ardeal: 'Hai, bă, mai repede, că ne prinde seara!',
       moldova: 'Stați, bă, liniștiți acolo la voi.',
       dobrogea: 'Litoralu’ e al nostru, bă, de la Mircea.',
+      oltenia: 'Tot de la Craiova veniți, bă!',
     },
     units: {
       taran: { name: 'Țăran', hp: 25, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
@@ -302,6 +342,8 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       ostas: { name: 'Dorobanț', hp: 60, damage: 8, cooldown: 9, costPrune: 20, costLemn: 5, trainTicks: 90 },
       // At home in the malls of the capital: half the price, and quicker to turn up.
       smecher: { ...SMECHER, costPrune: 60, trainTicks: 90 },
+      stegar: STEGAR,
+      iscoada: ISCOADA,
     },
     ability: {
       id: 'rezolva',
@@ -358,12 +400,15 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       ardeal: 'Veniți la mare o dată pe an și faceți pe deștepții.',
       moldova: 'La noi nu-i cu „wăi”, îi cu briză.',
       tara: 'Ajunge cu weekendu’ vostru la Vama!',
+      oltenia: 'Lăsați prazul, că la mare-i cu pește!',
     },
     units: {
       taran: { name: 'Țăran', hp: 25, damage: 2, cooldown: 10, costPrune: 15, costLemn: 0, trainTicks: 80 },
       // A sailor with a harpoon: the weakest soldier on the map, and the cheapest.
       ostas: { name: 'Marinar', hp: 40, damage: 6, cooldown: 9, costPrune: 12, costLemn: 4, trainTicks: 70 },
       smecher: SMECHER,
+      stegar: STEGAR,
+      iscoada: ISCOADA,
     },
     ability: {
       id: 'plaja',
@@ -392,6 +437,60 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
     },
   },
 
+  oltenia: {
+    id: 'oltenia',
+    name: 'Oltenia',
+    color: 0xd84315,
+    hatColor: 0x263238,
+    coatColor: 0x8d3b1e,
+    weapon: 'sabre',
+    speedPercent: 112,
+    buildTimePercent: 95,
+    buildingHpPercent: 100,
+    foodName: 'Praz',
+    paysHaraci: true,
+    traffic: false,
+    rival: 'tara',
+    quips: {
+      ardeal: 'Până beți voi pălinca, noi v-am luat curtea, vere!',
+      moldova: 'Ia uite-l și pe moldoveanul ăsta, vere!',
+      tara: 'Fără Craiova nu rezolvați nimic la București!',
+      dobrogea: 'Venim peste Dunăre, vere!',
+    },
+    units: {
+      taran: { name: 'Oltean', hp: 25, damage: 3, cooldown: 9, costPrune: 15, costLemn: 0, trainTicks: 75 },
+      ostas: { name: 'Pandur', hp: 55, damage: 8, cooldown: 8, costPrune: 18, costLemn: 5, trainTicks: 75 },
+      smecher: { ...SMECHER, costPrune: 75, trainTicks: 100 },
+      stegar: STEGAR,
+      iscoada: ISCOADA,
+    },
+    ability: {
+      id: 'iures',
+      name: 'Oltenii cu toată lumea!',
+      costPalinca: 0,
+      cooldownTicks: 360,
+      description:
+        'Iureș oltenesc: toți ai tăi prind putere și iuțeală la mânie, fără să mai stea la discuții.',
+    },
+    motto: '„Oltenii cu toată lumea — nu stăm patru ore pe câmp!”',
+    builtLine: 'Făcurăm și asta, vere!',
+    winLine: 'Băturăm pe toată lumea, vere! De la Craiova până la mare!',
+    loseLine: 'Ne luară curtea, vere… da’ ne întoarcem noi!',
+    lines: {
+      select: ['Zi, vere!', 'Ce fuse?', 'Aici sunt, mânca-ți-aș!', 'Gata de harță!'],
+      move: ['Fugă, vere!', 'Nu stăm patru ore pe câmp!', 'Mergem la Craiova!'],
+      wood: ['Tăiarăm pădurea, vere!', 'Dă toporu’ încoa’!'],
+      plums: ['Praz și prune, forță!', 'Culeserăm tot!'],
+      build: ['O ridicăm acuma, vere!', 'Nu stăm pe gânduri!'],
+      drink: ['Hai noroc, vere!', 'Zaibăr de-ăl bun!'],
+      full: ['Nu mai încăpem, vere!'],
+      attack: ['Pe ei, cu toată lumea!', 'Bagă sabia-n teacă că te tai singur!', 'Din Craiova, fără frică!'],
+      die: ['Aoleu, mânca-ți-aș…', 'Mă dovediră…'],
+      taunt: ['Cu toată lumea ne batem, vere!', 'Bagă sabia-n teacă!'],
+      scandal: ['Ia uite-i, vere, se luară!', 'Stai că mă bag și eu!'],
+    },
+  },
+
   otomani: {
     id: 'otomani',
     name: 'Poarta',
@@ -412,6 +511,8 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       // Come to collect: as tough as a plăieș, and there is always more than one.
       ostas: { name: 'Ienicer', hp: 70, damage: 9, cooldown: 10, costPrune: 0, costLemn: 0, trainTicks: 1 },
       smecher: SMECHER,
+      stegar: STEGAR,
+      iscoada: ISCOADA,
     },
     ability: { id: 'none', name: '', costPalinca: 0, cooldownTicks: 0, description: '' },
     motto: '',
@@ -450,4 +551,32 @@ export const SMECHER_LINES: Readonly<Record<LineKind, readonly string[]>> = {
   die: ['Nu mă lăsa, șefu’…', 'Sună-l pe tata…'],
   taunt: ['Ce vrei, bă?!'],
   scandal: ['CE TE UIȚI, BĂ?!', 'Știi cine-i tata?!', 'Hai afară, dacă ai curaj!', 'Mie-mi zici, bă?!'],
+};
+
+export const STEGAR_LINES: Readonly<Record<LineKind, readonly string[]>> = {
+  select: ['Pentru că sunt alergic la metal!', 'Eu am băț și pânză!', 'E o onoare să fii stegar!'],
+  move: ['Cap de bour!', 'Când e cald vă fac și vânt!', 'Plec primul, cu fața de supărat!'],
+  wood: ['Eu țin steagul, nu toporul!'],
+  plums: ['Stegarul nu culege!'],
+  build: ['Vă fac vânt cât munciți!'],
+  drink: ['Doar o gură, să nu ruginească bățul!'],
+  full: ['Nu încape steagul acolo!'],
+  attack: ['Cap de bour!', 'Ștefan! Ăștia au metal!', 'Cu băț și pânză înainte!'],
+  die: ['Eu-s alergic la metal!', 'Țineți steagul sus…'],
+  taunt: ['Cap de bour!', 'Când e cald vă fac și vânt!'],
+  scandal: ['Băi jderilor, gata cu caterinca!'],
+};
+
+export const ISCOADA_LINES: Readonly<Record<LineKind, readonly string[]>> = {
+  select: ['Șșșt! Sunt iscoadă!', 'Am ochelarii la mine!', 'Spune, încotro?'],
+  move: ['Pe furiș…', 'Nu mă vede nimeni!', 'Mă strecor prin pădure.'],
+  wood: ['Eu doar număr copacii.'],
+  plums: ['Iau doar două pentru drum.'],
+  build: ['Stau de șase!'],
+  drink: ['Una mică, pentru curaj!'],
+  full: ['Prea multă lume acolo.'],
+  attack: ['Te-am văzut primul!', 'Din umbră!'],
+  die: ['M-au dibuit…', 'Au văzut iscoada…'],
+  taunt: ['Nici nu știi de unde vin!'],
+  scandal: ['Stau în tufiș și iau notițe.'],
 };

@@ -275,7 +275,8 @@ export class SkirmishAi {
         queue.push(map.index(x, y));
       }
     }
-    for (let head = 0; head < queue.length && head < 4000; head++) {
+    const maxBfs = 4000 * Math.max(1, Math.ceil((w * map.height) / (144 * 104)));
+    for (let head = 0; head < queue.length && head < maxBfs; head++) {
       const i = queue[head]!;
       if (map.tiles[i] === Terrain.Forest && map.wood[i]! > 0) return i;
       const x = i % w;
@@ -415,7 +416,10 @@ export class SkirmishAi {
         if (foesAround(u) >= 2 && (!best || u.hp > best.hp)) best = u;
       }
       if (best) world.issue({ type: 'ability', faction, unitId: best.id });
-    } else if (ability === 'palinca' && soldiers.filter((u) => foesAround(u) >= 1).length >= 2) {
+    } else if (
+      (ability === 'palinca' || ability === 'iures') &&
+      soldiers.filter((u) => foesAround(u) >= 1).length >= 2
+    ) {
       // A round for everyone once a proper fight is on.
       world.issue({ type: 'ability', faction });
     }
