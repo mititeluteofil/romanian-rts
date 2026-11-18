@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ro">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#1b2a1b" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <title>Unirea: no, las' că vedem</title>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud">
+      <div id="topbar">
+        <span id="hud-title"></span>
+        <div id="hud-right">
+          <span id="hud-stock"></span>
+          <div id="hud-controls">
+            <button type="button" id="btn-box" title="Selectare cu chenar (B)">Chenar</button>
+            <button type="button" id="btn-idle" title="Țăran liber (Tab / I)" disabled>Liberi: 0</button>
+            <button type="button" id="btn-pause" title="Pauză (Space / P)">Pauză</button>
+            <button type="button" id="btn-speed" title="Viteză joc">1×</button>
+            <button type="button" id="btn-save" title="Salvează partida">Salvează</button>
+            <button type="button" id="btn-mute" title="Sonor">Sonor</button>
+            <button type="button" id="btn-menu" title="Înapoi la meniu">Meniu</button>
+          </div>
+        </div>
+      </div>
+      <div id="info">
+        <div id="hud-objective"></div>
+        <div id="hud-selection"></div>
+      </div>
+      <canvas id="minimap" aria-label="Harta României"></canvas>
+      <div id="haraci-box" class="hidden" aria-live="polite">
+        <div id="haraci-text"></div>
+        <div id="haraci-timer"></div>
+        <div id="haraci-actions">
+          <button type="button" id="btn-haraci-yes" class="primary">Da, plătesc</button>
+          <button type="button" id="btn-haraci-no">Nu plătesc</button>
+        </div>
+      </div>
+      <div id="bubbles"></div>
+      <div id="pause-banner" class="hidden">
+        <span>PAUZĂ</span>
+        <div id="pause-actions">
+          <button type="button" id="btn-resume">Continuă</button>
+          <button type="button" id="btn-abandon" class="danger">Închide / Șterge partida</button>
+        </div>
+      </div>
+      <div id="bottom">
+        <div id="toast" class="hidden"></div>
+        <div id="actions"></div>
+      </div>
+      <div id="debug"></div>
+    </div>
+    <div id="menu">
+      <div id="menu-box">
+        <h1>Unirea</h1>
+        <p id="menu-sub">no, las’ că vedem · anul 1600</p>
+        <div id="menu-continue" class="hidden"></div>
+        <label id="menu-nick-row" for="menu-nickname">
+          <span>Poreclă / Nume:</span>
+          <input
+            type="text"
+            id="menu-nickname"
+            maxlength="24"
+            placeholder="Voievod (implicit)"
+            autocomplete="off"
+          />
+        </label>
+        <p id="menu-intro">Alege-ți principatul. Ceilalți trei îți vin la curte cu oastea, iar Poarta vine după haraci.</p>
+        <label id="menu-mode">
+          <input type="checkbox" id="menu-peace" />
+          <span>Fără război: doar gospodărie, din 1600 până la mall.</span>
+        </label>
+        <label id="menu-map-size">
+          <input type="checkbox" id="menu-map-large" />
+          <span>Hartă mare (216×156, 5 principate cu Oltenia)</span>
+        </label>
+        <div id="menu-difficulty" role="group" aria-label="Dificultate">
+          <button type="button" data-difficulty="usor">Ușor</button>
+          <button type="button" data-difficulty="normal" class="active">Normal</button>
+          <button type="button" data-difficulty="greu">Greu</button>
+        </div>
+        <button type="button" id="btn-mp-open">Multiplayer online</button>
+        <div id="mp-panel" class="hidden">
+          <div id="mp-start">
+            <p>Joacă cu prietenii, fiecare pe principatul lui. Restul principatelor le ține calculatorul.</p>
+            <button type="button" id="btn-mp-create" class="primary">Creează cameră</button>
+            <form id="mp-join-form">
+              <input
+                type="text"
+                id="mp-code"
+                maxlength="5"
+                placeholder="Cod cameră"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                aria-label="Cod cameră"
+              />
+              <button type="submit" id="btn-mp-join">Intră</button>
+            </form>
+            <button type="button" id="btn-mp-back">Înapoi</button>
+          </div>
+          <div id="mp-lobby" class="hidden">
+            <p>Cod cameră: <strong id="mp-room-code"></strong></p>
+            <ol id="mp-players"></ol>
+            <p id="mp-hint"></p>
+            <button type="button" id="btn-mp-start" class="primary" disabled>Începe partida</button>
+            <button type="button" id="btn-mp-leave">Ieși din cameră</button>
+          </div>
+          <p id="mp-status" role="status" aria-live="polite"></p>
+        </div>
+        <div id="menu-factions"></div>
+      </div>
+    </div>
+    <div id="net-banner" class="hidden" role="alertdialog" aria-labelledby="net-banner-text">
+      <p id="net-banner-text"></p>
+      <div id="net-banner-actions">
+        <button type="button" id="btn-net-continue" class="hidden">Continuă oricum</button>
+        <button type="button" id="btn-net-menu" class="primary">Înapoi la meniu</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
