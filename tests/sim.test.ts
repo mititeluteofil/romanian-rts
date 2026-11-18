@@ -1071,6 +1071,10 @@ describe('saves, crowd fan-out and voice hook', () => {
     expect(clipForLine({ faction: 'tara', kind: 'wood', text: 'Hai să producem ceva pentru societate!' })).toBe(
       'tara/hai-producem.mp3',
     );
+    expect(clipForLine({ faction: 'moldova', kind: 'haraciRefuse', text: 'Muie Baiazid!' })).toBe(
+      'common/muie-baiazid.mp3',
+    );
+    expect(shouldPlayVoice({ faction: 'ardeal', kind: 'haraciRefuse', text: 'Muie Baiazid!' }, () => 0.99)).toBe(true);
   });
 
   it('supports AI difficulty presets and preserves them in snapshots', () => {

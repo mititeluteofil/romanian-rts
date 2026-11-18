@@ -47,7 +47,7 @@ body {
   grid-template-areas:
     'top top'
     'info map'
-    '. .'
+    '. haraci'
     'bottom bottom';
 }
 
@@ -156,6 +156,7 @@ body {
 #minimap {
   grid-area: map;
   align-self: start;
+  justify-self: end;
   margin: 6px calc(6px + env(safe-area-inset-right)) 0 0;
   width: clamp(130px, 24vw, 288px);
   height: auto;
@@ -166,6 +167,69 @@ body {
   pointer-events: auto;
   touch-action: none;
   cursor: crosshair;
+}
+
+#haraci-box {
+  grid-area: haraci;
+  align-self: start;
+  justify-self: end;
+  margin: 6px calc(6px + env(safe-area-inset-right)) 0 0;
+  width: clamp(170px, 28vw, 288px);
+  padding: 7px 9px;
+  background: var(--panel);
+  border: 2px solid #e53935;
+  pointer-events: auto;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+#haraci-box.hidden {
+  display: none;
+}
+
+#haraci-box.urgent {
+  border-color: #ff7043;
+  box-shadow: 0 0 10px rgba(229, 57, 53, 0.55);
+}
+
+#haraci-text {
+  font-weight: bold;
+  color: #ffe082;
+}
+
+#haraci-timer {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #ffab91;
+}
+
+#haraci-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+#haraci-actions button {
+  min-height: 32px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--ink);
+  background: #3d4a2c;
+  border: 1px solid var(--edge);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#haraci-actions button.primary {
+  background: #7a5a16;
+}
+
+#haraci-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 #bubbles {

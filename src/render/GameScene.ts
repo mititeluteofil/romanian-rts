@@ -168,6 +168,10 @@ export class GameScene extends Phaser.Scene {
         this.sfx.unlock();
         this.handleAction(id);
       },
+      onHaraci: (pay) => {
+        this.sfx.unlock();
+        this.answerHaraci(pay);
+      },
       onBoxSelect: () => {
         this.sfx.unlock();
         this.toggleBoxSelect();
@@ -830,6 +834,17 @@ export class GameScene extends Phaser.Scene {
         `Țărani ${world.unitCount(player, 'taran')} · Oșteni ${world.fighterCount(player)} ` +
         `(loc: ${world.unitCap(player)})`,
     );
+    const owed = world.haraci[player];
+    this.hud.setHaraci(
+      owed.due > 0 && world.winner === null && !this.lost
+        ? {
+            amount: owed.amount,
+            food: this.food,
+            secondsLeft: Math.ceil(owed.due / TICK_RATE),
+            canPay: stock.prune >= owed.amount,
+          }
+        : null,
+    );
     this.hud.setObjective(this.objectiveText(time));
     this.hud.setSelection(this.selectionText());
     this.hud.setActions(this.actionButtons());
@@ -964,18 +979,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     const buttons: ActionButton[] = [];
-    const owed = world.haraci[player];
-    if (owed.due > 0) {
-      buttons.push({
-        id: 'haraci:pay',
-        label: 'Plătește haraciul',
-        detail: `${owed.amount} ${this.food}`,
-        enabled: world.stock[player].prune >= owed.amount,
-        primary: true,
-      });
-      buttons.push({ id: 'haraci:no', label: 'Nu plătesc', detail: 'vin ienicerii', enabled: true });
-    }
-    if (hasPeasant) buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: owed.due === 0 });
+    if (hasPeasant) buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: true });
 
     const building = this.selectedBuilding === null ? undefined : world.getBuilding(this.selectedBuilding);
     if (building && building.faction === player) {
@@ -1103,14 +1107,24 @@ export class GameScene extends Phaser.Scene {
       this.world.issue({ type: 'advance', faction: player });
     } else if (id === 'bribe' && building !== null) {
       this.world.issue({ type: 'bribe', faction: player, buildingId: building });
-    } else if (id === 'haraci:pay' || id === 'haraci:no') {
-      this.world.issue({ type: 'haraci', faction: player, pay: id === 'haraci:pay' });
-      this.hud.hideToast();
     } else if (id === 'ability') {
       this.useAbility();
     } else if (id === 'deselect') {
       this.selectedUnits.clear();
       this.buildMenuOpen = false;
+    }
+  }
+
+  private answerHaraci(pay: boolean): void {
+    const owed = this.world.haraci[this.player];
+    if (owed.due <= 0) return;
+    this.world.issue({ type: 'haraci', faction: this.player, pay });
+    this.hud.hideToast();
+    if (!pay) {
+      const text = 'Muie Baiazid!';
+      this.sfx.voice({ faction: this.player, kind: 'haraciRefuse', text });
+      const court = this.world.courtOf(this.player);
+      if (court) this.hud.say(`b${court.id}`, text, this.time.now);
     }
   }
 

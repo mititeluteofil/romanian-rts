@@ -262,7 +262,12 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
         'Serios, ne batem cu ei?!',
       ],
       die: ['Of, wăi…', 'M-o ajuns, bre.', 'Eu-s alergic la metal!'],
-      taunt: ['Și vrei, wăi? Și vrei, wăi?!', 'ȘI VREI, WĂI?!', 'Mai tare, domnule!'],
+      taunt: [
+        'Și vrei, wăi? Și vrei, wăi?!',
+        'ȘI VREI, WĂI?!',
+        'Mai tare, domnule!',
+        'Te bag în șase saci!',
+      ],
       scandal: [
         'Uăi, se bat!',
         'Ia uite, bre, scandal!',
@@ -330,7 +335,7 @@ export const FACTIONS: Readonly<Record<FactionId, FactionDef>> = {
       full: ['Nu mai e loc, bă.'],
       attack: ['Pe ei, bă!', 'Bagă sabia-n teacă că te tai singur!', 'Lasă-i pe mâna mea.'],
       die: ['M-au rezolvat, bă…', 'Aoleu…'],
-      taunt: ['Ce vrei, bă?!', 'Să știe!'],
+      taunt: ['Ce vrei, bă?!', 'Să știe!', 'Ia uite ce față are!'],
       scandal: ['Ia uite, bă, circ!', 'Iar ăștia…', 'Stai să filmez.'],
     },
   },

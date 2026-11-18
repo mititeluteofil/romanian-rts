@@ -23,7 +23,7 @@ export type SfxKind =
   | 'lose'
   | 'save';
 
-export type VoiceEventKind = LineKind | 'built' | 'bribe' | 'era' | 'win' | 'lose';
+export type VoiceEventKind = LineKind | 'built' | 'bribe' | 'haraciRefuse' | 'era' | 'win' | 'lose';
 
 export interface VoiceLineContext {
   readonly faction: FactionId;
@@ -58,9 +58,7 @@ const VOICE_CLIPS: Readonly<Partial<Record<FactionId, Readonly<Partial<Record<Vo
       'moldova/nu-inteleg.mp3',
       'moldova/de-ce-aici.mp3',
     ],
-    taunt: ['moldova/si-vrei-3.mp3', 'moldova/si-vrei-2.mp3', 'moldova/mai-tare.mp3'],
-    scandal: ['moldova/si-vrei-1.mp3', 'moldova/mai-tare.mp3', 'moldova/voltaj.mp3'],
-    build: ['moldova/cocioaba.mp3', 'moldova/munca-hai.mp3'],
+    build: ['moldova/cocioaba.mp3', 'moldova/cocioaba-gatul.mp3', 'moldova/munca-hai.mp3'],
     built: ['moldova/cocioaba.mp3', 'moldova/victorie.mp3'],
     move: [
       'moldova/veniti.mp3',
@@ -77,8 +75,17 @@ const VOICE_CLIPS: Readonly<Partial<Record<FactionId, Readonly<Partial<Record<Vo
       'moldova/metal-au.mp3',
       'moldova/pumni.mp3',
       'moldova/ne-batem.mp3',
+      'moldova/sase-saci.mp3',
     ],
-    die: ['moldova/alergic.mp3', 'moldova/metal-stefan.mp3'],
+    taunt: ['moldova/si-vrei-3.mp3', 'moldova/si-vrei-2.mp3', 'moldova/mai-tare.mp3', 'moldova/sase-saci.mp3'],
+    scandal: [
+      'moldova/si-vrei-1.mp3',
+      'moldova/mai-tare.mp3',
+      'moldova/voltaj.mp3',
+      'moldova/mortii-ei.mp3',
+      'moldova/cocioaba-gatul.mp3',
+    ],
+    die: ['moldova/alergic.mp3', 'moldova/metal-stefan.mp3', 'moldova/mortii-ei.mp3'],
     win: ['moldova/victorie.mp3'],
   },
   ardeal: {
@@ -99,9 +106,9 @@ const VOICE_CLIPS: Readonly<Partial<Record<FactionId, Readonly<Partial<Record<Vo
     build: ['tara/facem-janica.mp3', 'tara/faliment.mp3', 'tara/hai-producem.mp3'],
     built: ['tara/facem-janica.mp3', 'tara/sa-stie.mp3'],
     bribe: ['tara/facem-janica.mp3', 'tara/faliment.mp3'],
-    attack: ['tara/baga-sabia.mp3', 'tara/sa-stie.mp3'],
-    taunt: ['tara/baga-sabia.mp3', 'tara/sa-stie.mp3'],
-    scandal: ['tara/faliment.mp3', 'tara/nu-ne-batem.mp3'],
+    attack: ['tara/baga-sabia.mp3', 'tara/sabia-teaca-nsfw.mp3', 'tara/natia-matii.mp3', 'tara/sa-stie.mp3'],
+    taunt: ['tara/baga-sabia.mp3', 'tara/sabia-teaca-nsfw.mp3', 'tara/ce-fata-are.mp3', 'tara/sa-stie.mp3'],
+    scandal: ['tara/ce-fata-are.mp3', 'tara/natia-matii.mp3', 'tara/faliment.mp3', 'tara/nu-ne-batem.mp3'],
   },
 };
 
@@ -113,12 +120,15 @@ function pickDistinct(options: readonly string[], avoidClip?: string, roll = Mat
 
 /** Match speech-bubble text directly to its matching clip when possible, avoiding back-to-back repeats. */
 export function clipForLine(ctx: VoiceLineContext, avoidClip?: string, roll = Math.random): string | undefined {
+  if (ctx.kind === 'haraciRefuse') return 'common/muie-baiazid.mp3';
   const lower = ctx.text.toLowerCase();
   if (ctx.faction === 'moldova') {
     if (lower.includes('și vrei')) {
       return pickDistinct(['moldova/si-vrei-1.mp3', 'moldova/si-vrei-2.mp3', 'moldova/si-vrei-3.mp3'], avoidClip, roll);
     }
-    if (lower.includes('cocioab')) return 'moldova/cocioaba.mp3';
+    if (lower.includes('cocioab')) {
+      return pickDistinct(['moldova/cocioaba.mp3', 'moldova/cocioaba-gatul.mp3'], avoidClip, roll);
+    }
     if (lower.includes('italia')) return 'moldova/italia.mp3';
     if (lower.includes('ardeal')) return 'moldova/veniti.mp3';
     if (lower.includes('cap de bour')) return 'moldova/cap-de-bour.mp3';
@@ -133,6 +143,7 @@ export function clipForLine(ctx: VoiceLineContext, avoidClip?: string, roll = Ma
     if (lower.includes('astăzi aici')) return 'moldova/de-ce-aici.mp3';
     if (lower.includes('batem cu ei')) return 'moldova/ne-batem.mp3';
     if (lower.includes('victori')) return 'moldova/victorie.mp3';
+    if (lower.includes('șase saci')) return 'moldova/sase-saci.mp3';
     if (lower.includes('munc')) return 'moldova/munca-hai.mp3';
   } else if (ctx.faction === 'ardeal') {
     if (lower.includes('neamtu')) return 'ardeal/neamtu.mp3';
@@ -150,7 +161,10 @@ export function clipForLine(ctx: VoiceLineContext, avoidClip?: string, roll = Ma
     if (lower.includes('producem')) return 'tara/hai-producem.mp3';
     if (lower.includes('băiatule')) return 'tara/hai-baiatule.mp3';
     if (lower.includes('batem azi')) return 'tara/nu-ne-batem.mp3';
-    if (lower.includes('sabia')) return 'tara/baga-sabia.mp3';
+    if (lower.includes('față are')) return 'tara/ce-fata-are.mp3';
+    if (lower.includes('sabia')) {
+      return pickDistinct(['tara/baga-sabia.mp3', 'tara/sabia-teaca-nsfw.mp3', 'tara/natia-matii.mp3'], avoidClip, roll);
+    }
   }
   const pool = VOICE_CLIPS[ctx.faction]?.[ctx.kind];
   return pool ? pickDistinct(pool, avoidClip, roll) : undefined;
@@ -423,7 +437,8 @@ export class SoundEngine {
     }
     const clip =
       context.unitKind === 'smecher' ? undefined : clipForLine(context, this.lastClip ?? undefined, roll);
-    const ctx = this.ready('voice', clip ? 750 : 220);
+    const cooldown = context.kind === 'haraciRefuse' ? 0 : clip ? 750 : 220;
+    const ctx = this.ready('voice', cooldown);
     if (!ctx) return;
     if (clip && this.playClip(ctx, clip)) {
       this.lastClip = clip;

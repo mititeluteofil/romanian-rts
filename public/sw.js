@@ -1,4 +1,4 @@
-const CACHE = 'unirea-v3';
+const CACHE = 'unirea-v4';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
