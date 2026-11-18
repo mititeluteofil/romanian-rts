@@ -23,16 +23,18 @@ export type SfxKind =
   | 'lose'
   | 'save';
 
+export type VoiceEventKind = LineKind | 'built' | 'bribe' | 'era' | 'win' | 'lose';
+
 export interface VoiceLineContext {
   readonly faction: FactionId;
   readonly unitKind?: UnitKind;
-  readonly kind: LineKind | 'built' | 'bribe' | 'era' | 'win' | 'lose';
+  readonly kind: VoiceEventKind;
   readonly text: string;
 }
 
 /**
- * External voice-line hook: replace or augment the built-in retro voice chirp
- * with pre-recorded Romanian voice clips or SpeechSynthesis.
+ * External voice-line hook: replace or augment the built-in voice pack / chirp
+ * with custom audio clips or SpeechSynthesis.
  */
 export type VoiceLineHook = (ctx: VoiceLineContext) => void;
 
@@ -46,17 +48,81 @@ const FACTION_BASE_HZ: Readonly<Record<FactionId, number>> = {
   otomani: 195,
 };
 
+/** Pre-cut voice clips under `public/voices/` mapped by faction and line kind. */
+const VOICE_CLIPS: Readonly<Partial<Record<FactionId, Readonly<Partial<Record<VoiceEventKind, readonly string[]>>>>>> = {
+  moldova: {
+    select: ['moldova/si-vrei-1.mp3', 'moldova/si-vrei-2.mp3', 'moldova/si-vrei-3.mp3'],
+    taunt: ['moldova/si-vrei-3.mp3', 'moldova/si-vrei-2.mp3'],
+    scandal: ['moldova/si-vrei-1.mp3', 'moldova/si-vrei-3.mp3'],
+    build: ['moldova/cocioaba.mp3', 'moldova/munca-hai.mp3'],
+    built: ['moldova/cocioaba.mp3'],
+    move: ['moldova/veniti.mp3', 'moldova/munca-hai.mp3', 'moldova/italia.mp3'],
+    wood: ['moldova/munca-hai.mp3'],
+    plums: ['moldova/munca-hai.mp3'],
+    attack: ['moldova/cap-de-bour.mp3', 'moldova/metal-stefan.mp3', 'moldova/metal-au.mp3'],
+    die: ['moldova/alergic.mp3', 'moldova/metal-stefan.mp3'],
+  },
+  ardeal: {
+    select: ['ardeal/neamtu.mp3'],
+    scandal: ['ardeal/neamtu.mp3'],
+    drink: ['ardeal/palinca-hai.mp3'],
+    build: ['ardeal/palinca-hai.mp3', 'ardeal/maine-cafa.mp3'],
+    move: ['ardeal/maine-cafa.mp3'],
+    wood: ['ardeal/maine-cafa.mp3'],
+    plums: ['ardeal/palinca-hai.mp3'],
+  },
+  tara: {
+    select: ['tara/da-boss.mp3'],
+    move: ['tara/da-boss.mp3'],
+    wood: ['tara/da-boss.mp3'],
+    plums: ['tara/da-boss.mp3'],
+    build: ['tara/facem-janica.mp3'],
+    built: ['tara/facem-janica.mp3'],
+    bribe: ['tara/facem-janica.mp3'],
+    attack: ['tara/baga-sabia.mp3'],
+    taunt: ['tara/baga-sabia.mp3'],
+  },
+};
+
+/** Match speech-bubble text directly to its matching clip when possible. */
+export function clipForLine(ctx: VoiceLineContext): string | undefined {
+  const lower = ctx.text.toLowerCase();
+  if (ctx.faction === 'moldova') {
+    if (lower.includes('și vrei')) return ['moldova/si-vrei-1.mp3', 'moldova/si-vrei-2.mp3', 'moldova/si-vrei-3.mp3'][ctx.text.length % 3];
+    if (lower.includes('cocioab')) return 'moldova/cocioaba.mp3';
+    if (lower.includes('italia')) return 'moldova/italia.mp3';
+    if (lower.includes('ardeal')) return 'moldova/veniti.mp3';
+    if (lower.includes('cap de bour')) return 'moldova/cap-de-bour.mp3';
+    if (lower.includes('metal')) return lower.includes('ștefan') ? 'moldova/metal-stefan.mp3' : 'moldova/metal-au.mp3';
+    if (lower.includes('alergic')) return 'moldova/alergic.mp3';
+    if (lower.includes('munc')) return 'moldova/munca-hai.mp3';
+  } else if (ctx.faction === 'ardeal') {
+    if (lower.includes('neamtu')) return 'ardeal/neamtu.mp3';
+    if (lower.includes('pălinc') || lower.includes('cunoaștem')) return 'ardeal/palinca-hai.mp3';
+    if (lower.includes('cafă') || lower.includes('mâine')) return 'ardeal/maine-cafa.mp3';
+  } else if (ctx.faction === 'tara') {
+    if (lower.includes('boss')) return 'tara/da-boss.mp3';
+    if (lower.includes('facem')) return 'tara/facem-janica.mp3';
+    if (lower.includes('sabia')) return 'tara/baga-sabia.mp3';
+  }
+  const pool = VOICE_CLIPS[ctx.faction]?.[ctx.kind];
+  if (!pool || pool.length === 0) return undefined;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 type Wave = OscillatorType;
 
 /**
- * Procedural Web Audio sound effects plus a pluggable voice-line hook.
- * Requires no external audio assets and works offline in browsers and WebViews.
+ * Procedural Web Audio sound effects plus recorded Romanian voice clips and a
+ * pluggable voice-line hook. Falls back cleanly to chirps when offline or uncached.
  */
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   private muted: boolean;
   private voiceHook: VoiceLineHook | null = null;
   private readonly lastPlayed = new Map<string, number>();
+  private readonly bufferCache = new Map<string, AudioBuffer | 'loading' | 'failed'>();
+  private activeVoice: AudioBufferSourceNode | null = null;
 
   constructor() {
     this.muted = this.readMutePref();
@@ -77,6 +143,14 @@ export class SoundEngine {
 
   toggleMute(): boolean {
     this.muted = !this.muted;
+    if (this.muted && this.activeVoice) {
+      try {
+        this.activeVoice.stop();
+      } catch {
+        // already stopped
+      }
+      this.activeVoice = null;
+    }
     if (typeof window !== 'undefined') {
       try {
         window.localStorage.setItem(MUTE_KEY, this.muted ? '1' : '0');
@@ -233,9 +307,55 @@ export class SoundEngine {
     }
   }
 
+  private playClip(ctx: AudioContext, relPath: string): boolean {
+    if (typeof fetch === 'undefined') return false;
+    const cached = this.bufferCache.get(relPath);
+    if (cached === 'failed') return false;
+    if (cached && cached !== 'loading') {
+      this.startBuffer(ctx, cached);
+      return true;
+    }
+    if (cached !== 'loading') {
+      this.bufferCache.set(relPath, 'loading');
+      void fetch(`./voices/${relPath}`)
+        .then((res) => (res.ok ? res.arrayBuffer() : Promise.reject(new Error('HTTP ' + res.status))))
+        .then((arr) => ctx.decodeAudioData(arr))
+        .then((buf) => {
+          this.bufferCache.set(relPath, buf);
+          if (!this.muted && ctx.state === 'running' && !this.activeVoice) {
+            this.startBuffer(ctx, buf);
+          }
+        })
+        .catch(() => {
+          this.bufferCache.set(relPath, 'failed');
+        });
+    }
+    return true;
+  }
+
+  private startBuffer(ctx: AudioContext, buf: AudioBuffer): void {
+    if (this.activeVoice) {
+      try {
+        this.activeVoice.stop();
+      } catch {
+        // ignore if already ended
+      }
+    }
+    const src = ctx.createBufferSource();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.55;
+    src.buffer = buf;
+    src.connect(gain).connect(ctx.destination);
+    src.onended = () => {
+      if (this.activeVoice === src) this.activeVoice = null;
+    };
+    this.activeVoice = src;
+    src.start();
+  }
+
   /**
    * Called whenever a unit or building utters a line. Routes to `voiceHook`
-   * if registered, otherwise plays a short faction-pitched vocal chirp.
+   * if registered, otherwise plays a matched voice clip or falls back to a chirp.
    */
   voice(context: VoiceLineContext): void {
     if (this.muted) return;
@@ -243,8 +363,11 @@ export class SoundEngine {
       this.voiceHook(context);
       return;
     }
-    const ctx = this.ready('voice', 220);
+    const clip = context.unitKind === 'smecher' ? undefined : clipForLine(context);
+    const ctx = this.ready('voice', clip ? 750 : 220);
     if (!ctx) return;
+    if (clip && this.playClip(ctx, clip)) return;
+
     const base = FACTION_BASE_HZ[context.faction] + (context.unitKind === 'smecher' ? 75 : 0);
     const jitter = (context.text.length % 5) * 14;
     const f1 = base + jitter;

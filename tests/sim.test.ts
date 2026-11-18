@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SoundEngine, type VoiceLineContext } from '../src/audio/sound';
+import { clipForLine, SoundEngine, type VoiceLineContext } from '../src/audio/sound';
 import { BUILDINGS } from '../src/data/buildings';
 import { formatSaveSummary, loadGame } from '../src/save';
 import { PLACES, Region } from '../src/data/romania';
@@ -1050,6 +1050,12 @@ describe('saves, crowd fan-out and voice hook', () => {
     expect(summary).toContain('Moldova');
     expect(summary).toContain('Fără război');
     expect(loadGame()).toBeNull();
+
+    expect(clipForLine({ faction: 'moldova', kind: 'select', text: 'Și vrei, wăi?' })).toMatch(/^moldova\/si-vrei-/);
+    expect(clipForLine({ faction: 'ardeal', kind: 'build', text: 'No, numai bine bem o pălincă…' })).toBe(
+      'ardeal/palinca-hai.mp3',
+    );
+    expect(clipForLine({ faction: 'tara', kind: 'select', text: 'Da, boss!' })).toBe('tara/da-boss.mp3');
   });
 
   it('supports AI difficulty presets and preserves them in snapshots', () => {
