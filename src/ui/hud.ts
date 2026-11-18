@@ -1,3 +1,5 @@
+import { armTwoTap } from './confirm';
+
 const BUBBLE_MS = 2200;
 
 interface Bubble {
@@ -89,7 +91,9 @@ export class Hud {
     this.idleBtn.addEventListener('click', () => callbacks.onIdlePeasant(), { signal });
     this.pauseBtn.addEventListener('click', () => callbacks.onPause(), { signal });
     this.resumeBtn.addEventListener('click', () => callbacks.onPause(), { signal });
-    this.abandonBtn?.addEventListener('click', () => callbacks.onAbandon?.(), { signal });
+    if (this.abandonBtn) {
+      armTwoTap(this.abandonBtn, 'Sigur? Atinge iar ca să ștergi', () => callbacks.onAbandon?.(), signal);
+    }
     this.speedBtn.addEventListener('click', () => callbacks.onSpeed(), { signal });
     this.saveBtn.addEventListener('click', () => callbacks.onSave(), { signal });
     this.muteBtn.addEventListener('click', () => callbacks.onMute(), { signal });

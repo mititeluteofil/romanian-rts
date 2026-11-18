@@ -13,6 +13,7 @@ import {
   saveNickname,
   type SaveGame,
 } from './save';
+import { armTwoTap } from './ui/confirm';
 import './ui/hud.css';
 
 const sound = new SoundEngine();
@@ -83,12 +84,15 @@ function wireNicknameInput(): HTMLInputElement | null {
   const input = document.getElementById('menu-nickname') as HTMLInputElement | null;
   if (!input) return null;
   input.placeholder = `${DEFAULT_NICKNAME} (implicit)`;
+  let stored = '';
   try {
-    const raw = window.localStorage.getItem(NICKNAME_KEY);
-    if (raw) input.value = raw;
+    stored = window.localStorage.getItem(NICKNAME_KEY) ?? '';
   } catch {
     // ignore storage errors
   }
+  input.value = stored;
+  // `defaultValue` marks what was prefilled, so Continue can tell an edit (even a clear) from no edit.
+  input.defaultValue = stored;
   if (!input.dataset.wired) {
     input.dataset.wired = '1';
     input.addEventListener('change', () => {
@@ -119,7 +123,8 @@ function showMenu(): void {
       detail.textContent = formatSaveSummary(saved);
       resumeBtn.append(title, detail);
       resumeBtn.addEventListener('click', () => {
-        const nick = nickInput?.value.trim() ? saveNickname(nickInput.value) : (saved.nickname ?? loadNickname());
+        const edited = nickInput !== null && nickInput.value !== nickInput.defaultValue;
+        const nick = edited ? saveNickname(nickInput.value) : (saved.nickname ?? loadNickname());
         launch({ player: saved.player, nickname: nick, peaceful: saved.peaceful, save: saved });
       });
 
@@ -128,7 +133,7 @@ function showMenu(): void {
       deleteBtn.id = 'btn-delete-save';
       deleteBtn.className = 'delete-save-btn';
       deleteBtn.textContent = 'Închide / Șterge partida';
-      deleteBtn.addEventListener('click', () => {
+      armTwoTap(deleteBtn, 'Sigur? Atinge iar ca să ștergi', () => {
         sound.unlock();
         sound.play('select');
         clearSave();
@@ -136,7 +141,11 @@ function showMenu(): void {
         cont.classList.add('hidden');
       });
 
-      cont.append(resumeBtn, deleteBtn);
+      const note = document.createElement('p');
+      note.className = 'continue-note';
+      note.textContent = 'O partidă nouă o înlocuiește pe asta la prima salvare.';
+
+      cont.append(resumeBtn, deleteBtn, note);
     } else {
       cont.classList.add('hidden');
     }
@@ -163,7 +172,6 @@ function showMenu(): void {
     button.addEventListener('click', () => {
       const isLarge = Boolean(mapLarge?.checked);
       const nickname = saveNickname(nickInput?.value);
-      clearSave();
       launch({
         player: id,
         nickname,

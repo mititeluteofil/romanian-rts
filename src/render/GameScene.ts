@@ -140,6 +140,8 @@ export class GameScene extends Phaser.Scene {
   private goalReached = false;
   /** The player's court has fallen; the others may still be at it. */
   private lost = false;
+  /** Set once the player deletes this match, so no later autosave/pagehide brings it back. */
+  private abandoned = false;
   /** The capital took its cut of the funds that are about to be announced. */
   private taxed = false;
   private paused = false;
@@ -238,6 +240,7 @@ export class GameScene extends Phaser.Scene {
       },
       onAbandon: () => {
         this.sfx.unlock();
+        this.abandoned = true;
         clearSave();
         this.onReturnToMenu?.();
       },
@@ -441,6 +444,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private persistSave(): boolean {
+    if (this.abandoned) return false;
     const cam = this.controls.center;
     return saveGame({
       version: 1,
@@ -995,7 +999,8 @@ export class GameScene extends Phaser.Scene {
       Math.floor((view.y + view.height / 2) / TILE),
     );
     const era = ERAS[world.era[player]]!;
-    this.hud.setTitle(`${this.nickname} · ${REGION_NAMES[region]} · ${era.name}, ${era.year}`);
+    // Nickname last: on a narrow phone the ellipsis eats the name, not where/when you are.
+    this.hud.setTitle(`${REGION_NAMES[region]} · ${era.name}, ${era.year} · ${this.nickname}`);
     this.hud.setStock(
       `Lemn ${stock.lemn} · ${FACTIONS[player].foodName} ${stock.prune} · ` +
         (this.drinks ? `Pălincă ${stock.palinca} · ` : '') +

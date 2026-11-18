@@ -67,6 +67,14 @@ body {
   white-space: nowrap;
 }
 
+#hud-title {
+  /* Long nicknames must not push the title past a phone's edge. */
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #hud-right {
   display: flex;
   flex-wrap: wrap;
@@ -436,6 +444,18 @@ body {
   background: #5a221e;
   border-color: #e57373;
   color: #ffcdd2;
+}
+
+#menu-continue .continue-note {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+#pause-actions button.confirming,
+#menu-continue button.delete-save-btn.confirming {
+  background: #b71c1c;
+  color: #fff;
 }
 
 #menu-nick-row {

@@ -1427,8 +1427,8 @@ describe('milestone 7 and extra features', () => {
     for (let i = 0; i < 60; i++) world.step();
     expect(world.garrisonCount(tower)).toBe(2);
     expect(world.garrisonCount(court)).toBe(1);
-    // Carried plums were deposited upon entering shelter
-    expect(world.stock.ardeal.prune).toBe(pruneBefore + 5);
+    // A tower is not a depot: the plums stay on p2's back instead of reaching the stock
+    expect(world.stock.ardeal.prune).toBe(pruneBefore);
     // Garrisoned peasants still count toward faction unitCount
     expect(world.unitCount('ardeal', 'taran')).toBe(3);
     expect(world.units.filter((u) => u.faction === 'ardeal').length).toBe(0);
@@ -1452,6 +1452,8 @@ describe('milestone 7 and extra features', () => {
     expect(world.units.filter((u) => u.faction === 'ardeal').length).toBe(2);
     const restoredP1 = world.getUnit(p1.id)!;
     expect(restoredP1.order.type).toBe('gather');
+    expect(world.getUnit(p2.id)!.carryAmount).toBe(5);
+    expect(world.getUnit(p2.id)!.carryKind).toBe('prune');
 
     // If a defensive building with garrisoned villagers is destroyed, they survive and exit onto nearby tiles
     tower.hp = 1;
@@ -1463,6 +1465,58 @@ describe('milestone 7 and extra features', () => {
     for (let i = 0; i < 20; i++) world.step();
     expect(world.getBuilding(tower.id)).toBeUndefined();
     expect(world.getUnit(p2.id)).toBeDefined();
+  });
+
+  it('delivers a carried load when sheltering in the court', () => {
+    const map = mapFromRows(['........', '........', '........', '........', '........', '........']);
+    const world = new World({ seed: 1, map });
+    const court = world.placeBuilding('curte', 'ardeal', 1, 1, true);
+    const p = world.spawnUnit('ardeal', 1, 4, 'taran');
+    p.carryKind = 'lemn';
+    p.carryAmount = 7;
+    const before = world.stock.ardeal.lemn;
+    world.issue({ type: 'garrison', faction: 'ardeal', unitIds: [p.id], buildingId: court.id });
+    for (let i = 0; i < 40; i++) world.step();
+    expect(world.garrisonCount(court)).toBe(1);
+    expect(world.stock.ardeal.lemn).toBe(before + 7);
+  });
+
+  it('sends sheltered peasants home too when their principality falls', () => {
+    const map = mapFromRows(Array.from({ length: 10 }, () => '..............'));
+    const world = new World({ seed: 1, map });
+    world.placeBuilding('curte', 'ardeal', 10, 6, true);
+    const court = world.placeBuilding('curte', 'moldova', 1, 1, true);
+    const tower = world.placeBuilding('turn', 'moldova', 6, 1, true);
+    const p = world.spawnUnit('moldova', 6, 3, 'taran');
+    world.issue({ type: 'garrison', faction: 'moldova', unitIds: [p.id], buildingId: tower.id });
+    for (let i = 0; i < 30; i++) world.step();
+    expect(world.garrisonCount(tower)).toBe(1);
+    court.hp = 0;
+    world.step();
+    expect(world.buildings.some((b) => b.faction === 'moldova')).toBe(false);
+    expect(world.units.some((u) => u.faction === 'moldova')).toBe(false);
+  });
+
+  it('never loses sheltered peasants when a walled-in tower is destroyed', () => {
+    const map = mapFromRows(['..........', '..........', '..........', '..........', '..........']);
+    const world = new World({ seed: 1, map });
+    world.placeBuilding('curte', 'ardeal', 7, 2, true);
+    const tower = world.placeBuilding('turn', 'ardeal', 2, 2, true);
+    const ids = [0, 1, 2, 3].map((i) => world.spawnUnit('ardeal', i, 4, 'taran').id);
+    world.issue({ type: 'garrison', faction: 'ardeal', unitIds: ids, buildingId: tower.id });
+    for (let i = 0; i < 60; i++) world.step();
+    expect(world.garrisonCount(tower)).toBe(4);
+    // Crowd every free tile so nobody has an empty spot to step out onto.
+    for (let ty = 0; ty < 5; ty++) {
+      for (let tx = 0; tx < 10; tx++) {
+        if (world.buildingAt(tx, ty)) continue;
+        world.spawnUnit('ardeal', tx, ty, 'ostas');
+      }
+    }
+    tower.hp = 0;
+    world.step();
+    expect(world.getBuilding(tower.id)).toBeUndefined();
+    for (const id of ids) expect(world.getUnit(id)).toBeDefined();
   });
 
   it('supports player nickname with default fallback and deleting a solo saved game', () => {
