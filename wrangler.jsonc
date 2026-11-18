@@ -1,8 +1,22 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "unirea-lockstep-relay",
+  // One Worker serves both the static game (./dist) and the lockstep relay.
+  // Static files are served directly; anything that is not an asset (e.g. the
+  // WebSocket upgrade to /relay?room=...) falls through to worker/index.ts.
+  "name": "romanian-rts",
   "main": "worker/index.ts",
-  "compatibility_date": "2025-01-01",
+  "compatibility_date": "2026-11-16",
+  "observability": {
+    "enabled": true
+  },
+  "build": {
+    "command": "npm run build"
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
   "durable_objects": {
     "bindings": [
       {

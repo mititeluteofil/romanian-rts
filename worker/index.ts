@@ -96,13 +96,21 @@ export interface Env {
     idFromName(name: string): unknown;
     get(id: unknown): { fetch(req: Request): Promise<Response> };
   };
+  ASSETS: { fetch(req: Request): Promise<Response> };
 }
+
+/** Path the lockstep relay listens on: wss://<host>/relay?room=<id>. */
+const RELAY_PATH = '/relay';
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const room = url.searchParams.get('room') ?? 'default';
-    const id = env.MATCH_ROOM.idFromName(room);
-    return env.MATCH_ROOM.get(id).fetch(request);
+    if (url.pathname === RELAY_PATH || url.pathname.startsWith(`${RELAY_PATH}/`)) {
+      const room = url.searchParams.get('room') ?? 'default';
+      const id = env.MATCH_ROOM.idFromName(room);
+      return env.MATCH_ROOM.get(id).fetch(request);
+    }
+    // Everything else is the static game build.
+    return env.ASSETS.fetch(request);
   },
 };
