@@ -18,6 +18,8 @@ export type SfxKind =
   | 'rezolvaOk'
   | 'rezolvaFail'
   | 'plaja'
+  | 'iures'
+  | 'research'
   | 'scandal'
   | 'win'
   | 'lose'
@@ -39,12 +41,14 @@ export interface VoiceLineContext {
 export type VoiceLineHook = (ctx: VoiceLineContext) => void;
 
 const MUTE_KEY = 'unirea.muted';
+const TTS_KEY = 'unirea.tts';
 
 const FACTION_BASE_HZ: Readonly<Record<FactionId, number>> = {
   ardeal: 210,
   moldova: 270,
   tara: 245,
   dobrogea: 255,
+  oltenia: 285,
   otomani: 195,
 };
 
@@ -110,6 +114,17 @@ const VOICE_CLIPS: Readonly<Partial<Record<FactionId, Readonly<Partial<Record<Vo
     taunt: ['tara/baga-sabia.mp3', 'tara/sabia-teaca-nsfw.mp3', 'tara/ce-fata-are.mp3', 'tara/sa-stie.mp3'],
     scandal: ['tara/ce-fata-are.mp3', 'tara/natia-matii.mp3', 'tara/faliment.mp3', 'tara/nu-ne-batem.mp3'],
   },
+  oltenia: {
+    select: ['tara/hai-baiatule.mp3', 'tara/sa-stie.mp3'],
+    move: ['tara/hai-baiatule.mp3', 'tara/auras-munca.mp3'],
+    wood: ['tara/hai-producem.mp3', 'tara/auras-munca.mp3'],
+    plums: ['tara/auras-munca.mp3', 'tara/hai-producem.mp3'],
+    build: ['tara/facem-janica.mp3', 'tara/sa-stie.mp3'],
+    built: ['tara/sa-stie.mp3', 'tara/facem-janica.mp3'],
+    attack: ['tara/baga-sabia.mp3', 'tara/sabia-teaca-nsfw.mp3', 'tara/natia-matii.mp3'],
+    taunt: ['tara/baga-sabia.mp3', 'tara/sabia-teaca-nsfw.mp3', 'tara/ce-fata-are.mp3'],
+    scandal: ['tara/ce-fata-are.mp3', 'tara/natia-matii.mp3'],
+  },
 };
 
 function pickDistinct(options: readonly string[], avoidClip?: string, roll = Math.random): string | undefined {
@@ -122,6 +137,12 @@ function pickDistinct(options: readonly string[], avoidClip?: string, roll = Mat
 export function clipForLine(ctx: VoiceLineContext, avoidClip?: string, roll = Math.random): string | undefined {
   if (ctx.kind === 'haraciRefuse') return 'common/muie-baiazid.mp3';
   const lower = ctx.text.toLowerCase();
+  if (ctx.unitKind === 'stegar') {
+    if (lower.includes('alergic')) return 'moldova/alergic.mp3';
+    if (lower.includes('cap de bour')) return 'moldova/cap-de-bour.mp3';
+    if (lower.includes('vânt')) return 'moldova/vint.mp3';
+    if (lower.includes('metal')) return 'moldova/metal-stefan.mp3';
+  }
   if (ctx.faction === 'moldova') {
     if (lower.includes('și vrei')) {
       return pickDistinct(['moldova/si-vrei-1.mp3', 'moldova/si-vrei-2.mp3', 'moldova/si-vrei-3.mp3'], avoidClip, roll);
@@ -152,7 +173,7 @@ export function clipForLine(ctx: VoiceLineContext, avoidClip?: string, roll = Ma
     if (lower.includes('pălinc') || lower.includes('cunoaștem')) return 'ardeal/palinca-hai.mp3';
     if (lower.includes('cafă') || lower.includes('mâine')) return 'ardeal/maine-cafa.mp3';
     if (lower.includes('moldoven')) return 'ardeal/nu-fac-nimic.mp3';
-  } else if (ctx.faction === 'tara') {
+  } else if (ctx.faction === 'tara' || ctx.faction === 'oltenia') {
     if (lower.includes('boss')) return 'tara/da-boss.mp3';
     if (lower.includes('să știe')) return 'tara/sa-stie.mp3';
     if (lower.includes('faliment')) return 'tara/faliment.mp3';
@@ -189,6 +210,7 @@ type Wave = OscillatorType;
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   private muted: boolean;
+  private ttsEnabled: boolean;
   private voiceHook: VoiceLineHook | null = null;
   private readonly lastPlayed = new Map<string, number>();
   private readonly bufferCache = new Map<string, AudioBuffer | 'loading' | 'failed'>();
@@ -196,13 +218,14 @@ export class SoundEngine {
   private lastClip: string | null = null;
 
   constructor() {
-    this.muted = this.readMutePref();
+    this.muted = this.readPref(MUTE_KEY);
+    this.ttsEnabled = this.readPref(TTS_KEY);
   }
 
-  private readMutePref(): boolean {
+  private readPref(key: string): boolean {
     if (typeof window === 'undefined') return false;
     try {
-      return window.localStorage.getItem(MUTE_KEY) === '1';
+      return window.localStorage.getItem(key) === '1';
     } catch {
       return false;
     }
@@ -210,6 +233,22 @@ export class SoundEngine {
 
   isMuted(): boolean {
     return this.muted;
+  }
+
+  isTtsEnabled(): boolean {
+    return this.ttsEnabled;
+  }
+
+  toggleTts(): boolean {
+    this.ttsEnabled = !this.ttsEnabled;
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(TTS_KEY, this.ttsEnabled ? '1' : '0');
+      } catch {
+        // ignore storage errors
+      }
+    }
+    return this.ttsEnabled;
   }
 
   toggleMute(): boolean {
@@ -357,6 +396,14 @@ export class SoundEngine {
         this.tone(ctx, 440, 554, 0.12, 'sine', 0.06, 0);
         this.tone(ctx, 554, 659, 0.16, 'sine', 0.06, 0.1);
         break;
+      case 'iures':
+        this.tone(ctx, 330, 587, 0.1, 'sawtooth', 0.07, 0);
+        this.tone(ctx, 587, 784, 0.14, 'sawtooth', 0.07, 0.09);
+        break;
+      case 'research':
+        this.tone(ctx, 440, 660, 0.11, 'sine', 0.07, 0);
+        this.tone(ctx, 660, 880, 0.15, 'sine', 0.07, 0.1);
+        break;
       case 'scandal':
         this.tone(ctx, 640, 410, 0.08, 'square', 0.045, 0);
         this.tone(ctx, 480, 720, 0.08, 'square', 0.045, 0.07);
@@ -443,6 +490,25 @@ export class SoundEngine {
     if (clip && this.playClip(ctx, clip)) {
       this.lastClip = clip;
       return;
+    }
+
+    if (
+      this.ttsEnabled &&
+      typeof window !== 'undefined' &&
+      'speechSynthesis' in window &&
+      typeof SpeechSynthesisUtterance !== 'undefined'
+    ) {
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(context.text);
+        u.lang = 'ro-RO';
+        u.rate = context.faction === 'ardeal' ? 0.85 : context.faction === 'oltenia' ? 1.18 : 1.05;
+        u.pitch = context.unitKind === 'smecher' ? 0.9 : 1.0;
+        window.speechSynthesis.speak(u);
+        return;
+      } catch {
+        // fall back to synth chirp
+      }
     }
 
     const base = FACTION_BASE_HZ[context.faction] + (context.unitKind === 'smecher' ? 75 : 0);

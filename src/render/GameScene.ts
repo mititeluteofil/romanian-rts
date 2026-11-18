@@ -1,19 +1,23 @@
 import Phaser from 'phaser';
 import { AI_THINK_EVERY, SkirmishAi, type Difficulty } from '../ai/skirmish';
 import { SoundEngine, type VoiceLineHook } from '../audio/sound';
-import { BUILD_MENU, BUILDINGS, ORCHARD_CAPACITY, type BuildingKind } from '../data/buildings';
+import { BUILD_MENU, BUILDINGS, ORCHARD_CAPACITY, TECHS, type BuildingKind, type TechId } from '../data/buildings';
 import { BRIBE_ERA, COURT_NAMES, ERAS, LAST_ERA } from '../data/eras';
 import {
   FACTION_IDS,
   FACTIONS,
+  ISCOADA_LINES,
   isFighter,
+  PLAYABLE_FACTION_IDS,
   SMECHER_LINES,
+  STEGAR_LINES,
   type FactionId,
   type LineKind,
   type UnitKind,
 } from '../data/factions';
 import { REGION_NAMES } from '../data/romania';
 import { CameraControls, type WorldRect } from '../input/CameraControls';
+import type { CommandSink } from '../net/lockstep';
 import { clearSave, saveGame, type SaveGame } from '../save';
 import { nearestTile } from '../sim/pathfinding';
 import { hash2 } from '../sim/rng';
@@ -26,6 +30,7 @@ import {
   TICK_RATE,
   World,
   type Building,
+  type Command,
   type SimEvent,
   type Unit,
 } from '../sim/world';
@@ -52,7 +57,7 @@ const SPEEDS = [1, 2, 4] as const;
 const CARRY_COLORS = { lemn: 0x8a5a2b, prune: 0x6a3fa0 } as const;
 const OWN_HP = 0x7ee081;
 const ENEMY_HP = 0xe05a4a;
-const UNIT_KINDS: readonly UnitKind[] = ['taran', 'ostas', 'smecher'];
+const UNIT_KINDS: readonly UnitKind[] = ['taran', 'ostas', 'smecher', 'stegar', 'iscoada'];
 
 export interface GameOptions {
   /** The faction the person at this device plays; the AI takes the others. */
@@ -60,6 +65,12 @@ export interface GameOptions {
   /** Quiet neighbour: no war, the goal is to reach the present and open a mall. */
   readonly peaceful: boolean;
   readonly difficulty?: Difficulty;
+  /** Optional map scale (1 = 144×104 normal, 1.5 = 216×156 large). */
+  readonly mapScale?: number;
+  /** Whether Oltenia joins the match as a 5th principality. */
+  readonly includeOltenia?: boolean;
+  /** Optional lockstep command sink for multiplayer matches. */
+  readonly commandSink?: CommandSink;
   /** Optional saved game to resume instead of starting from 1600. */
   readonly save?: SaveGame;
   readonly sound?: SoundEngine;
@@ -76,6 +87,8 @@ interface Placement {
   readonly kind: BuildingKind;
   tx: number;
   ty: number;
+  startTx?: number;
+  startTy?: number;
 }
 
 function pick<T>(items: readonly T[]): T {
@@ -88,6 +101,9 @@ export class GameScene extends Phaser.Scene {
   private readonly player: FactionId;
   private readonly peaceful: boolean;
   private readonly difficulty: Difficulty;
+  private readonly mapScale: number;
+  private readonly includeOltenia: boolean;
+  private readonly commandSink?: CommandSink;
   /** What the food is called here, in lower case: "prune", "perje", "pește". */
   private readonly food: string;
   /** Whether pălincă is of any use to the player's faction. */
@@ -113,6 +129,8 @@ export class GameScene extends Phaser.Scene {
   private selectedBuilding: number | null = null;
   private idleCursor = 0;
   private placing: Placement | null = null;
+  private rallyMode = false;
+  private attackMoveMode = false;
   /** Whether the action bar is showing the list of things to build. */
   private buildMenuOpen = false;
   /** Peaceful mode: the mall has been opened and celebrated. */
@@ -134,11 +152,19 @@ export class GameScene extends Phaser.Scene {
     this.player = options.player;
     this.peaceful = options.peaceful;
     this.difficulty = options.save?.difficulty ?? options.difficulty ?? 'normal';
+    this.mapScale = options.mapScale ?? 1;
+    this.includeOltenia = options.includeOltenia ?? (options.player === 'oltenia' || this.mapScale > 1);
+    this.commandSink = options.commandSink;
     this.initialSave = options.save;
     this.sfx = options.sound ?? new SoundEngine();
     this.onReturnToMenu = options.onReturnToMenu;
     this.food = FACTIONS[options.player].foodName.toLowerCase();
     this.drinks = FACTIONS[options.player].ability.id === 'palinca';
+  }
+
+  private issue(cmd: Command): void {
+    if (this.commandSink) this.commandSink.send(cmd);
+    else this.world.issue(cmd);
   }
 
   private get speed(): number {
@@ -154,10 +180,15 @@ export class GameScene extends Phaser.Scene {
       this.lost = save.lost;
       this.taxed = save.taxed;
     } else {
-      this.world = new World({ seed: 1600 });
-      this.ais = FACTION_IDS.filter((f) => f !== this.player).map(
-        (f) => new SkirmishAi(f, { attacks: !this.peaceful, difficulty: this.difficulty }),
-      );
+      this.world = new World({
+        seed: 1600,
+        mapScale: this.mapScale,
+        includeOltenia: this.includeOltenia,
+      });
+      const activeFactions = this.world.includeOltenia ? PLAYABLE_FACTION_IDS : FACTION_IDS;
+      this.ais = activeFactions
+        .filter((f) => f !== this.player)
+        .map((f) => new SkirmishAi(f, { attacks: !this.peaceful, difficulty: this.difficulty }));
     }
 
     const hook = (globalThis as { __unireaVoiceHook?: VoiceLineHook }).__unireaVoiceHook;
@@ -526,6 +557,11 @@ export class GameScene extends Phaser.Scene {
             this.sfx.play('plaja');
             this.hud.toast('Oștenii tăi au lăsat armele și s-au dus la plajă.', time, 5000);
           }
+        } else if (event.ability === 'iures') {
+          if (event.faction === this.player) {
+            this.sfx.play('iures');
+            this.hud.toast('Iureș oltenească! Cetele tale lovesc cu +50% putere!', time, 4500);
+          }
         } else {
           if (event.faction === this.player) this.sfx.play('palinca');
           // Everybody with a glass in hand says something, friend or foe.
@@ -534,6 +570,20 @@ export class GameScene extends Phaser.Scene {
           }
         }
         break;
+      case 'researched': {
+        const tech = TECHS[event.techId];
+        if (event.faction === this.player) {
+          this.sfx.play('research');
+          const msg = event.targetFaction
+            ? `${tech.name} trimisă către ${FACTIONS[event.targetFaction].name}!`
+            : `Cercetare gata: ${tech.name} (${tech.description}).`;
+          this.hud.toast(msg, time, 5000);
+        } else if (event.targetFaction === this.player) {
+          this.sfx.play('haraci');
+          this.hud.toast(`${FACTIONS[event.faction].name} a trimis „${tech.name}” peste tine!`, time, 6000);
+        }
+        break;
+      }
       case 'era': {
         const era = ERAS[event.era]!;
         if (event.faction === this.player) {
@@ -664,8 +714,15 @@ export class GameScene extends Phaser.Scene {
 
   private speak(unit: Unit | undefined, kind: LineKind, time: number): void {
     if (!unit) return;
-    // The mall crowd has its own way of talking, wherever it was raised.
-    const lines = unit.kind === 'smecher' ? SMECHER_LINES : FACTIONS[unit.faction].lines;
+    // The mall crowd, banner-bearer and scout each have their own way of talking.
+    const lines =
+      unit.kind === 'smecher'
+        ? SMECHER_LINES
+        : unit.kind === 'stegar'
+          ? STEGAR_LINES
+          : unit.kind === 'iscoada'
+            ? ISCOADA_LINES
+            : FACTIONS[unit.faction].lines;
     const text = pick(lines[kind]);
     this.hud.say(`u${unit.id}`, text, time);
     if (unit.faction === this.player || this.nearView(unit.x * SUB_TO_PX, unit.y * SUB_TO_PX)) {
@@ -758,6 +815,20 @@ export class GameScene extends Phaser.Scene {
       const total = Math.floor((def.buildTicks * FACTIONS[building.faction].buildTimePercent) / 100);
       this.drawBar(x + 2, y - 5, side - 4, total > 0 ? 1 - building.buildLeft / total : 1, 0xfff176);
     }
+    if (building.done && building.kind === 'cazan' && building.distillLeft > 0) {
+      // Animated firebox glow and rising steam puffs from the still.
+      const phase = (this.frame % 60) / 60;
+      this.top.fillStyle(0xff8a30, 0.75);
+      this.top.fillRect(x + 12, y + 25, 6, 2);
+      this.top.fillStyle(0xf2f2f2, 0.65 * (1 - phase));
+      this.top.fillRect(x + 19, y - Math.floor(phase * 8), 3, 2);
+    }
+    if (building.done && building.kind === 'gater' && this.world.debuffs[building.faction].panaCurent === 0) {
+      // Spinning saw blade glint.
+      const glint = Math.floor(this.frame / 4) % 4;
+      this.top.fillStyle(0xf7f7f7, 0.9);
+      this.top.fillRect(x + 13 + (glint % 2) * 3, y + 17 + (glint >> 1) * 2, 2, 1);
+    }
     if (selected || building.hp < building.maxHp) {
       const color = building.faction === this.player ? OWN_HP : ENEMY_HP;
       this.drawBar(x + 2, y - 9, side - 4, building.hp / building.maxHp, color);
@@ -765,6 +836,17 @@ export class GameScene extends Phaser.Scene {
     if (selected) {
       this.top.lineStyle(1, 0xfff176, 1);
       this.top.strokeRect(x - 1, y - 1, side + 2, side + 2);
+      if (building.rally && building.faction === this.player) {
+        const sx = x + side / 2;
+        const sy = y + side / 2;
+        const rx = (building.rally.tx + 0.5) * TILE;
+        const ry = (building.rally.ty + 0.5) * TILE;
+        this.top.lineStyle(1, 0x7ee081, 0.85);
+        this.top.lineBetween(sx, sy, rx, ry);
+        this.top.fillStyle(0x7ee081, 1);
+        this.top.fillRect(rx - 2, ry - 6, 5, 4);
+        this.top.fillRect(rx - 2, ry - 6, 1, 7);
+      }
     }
   }
 
@@ -787,6 +869,24 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private wallLineTiles(placing: Placement): Array<{ tx: number; ty: number }> {
+    if (placing.startTx === undefined || placing.startTy === undefined) {
+      return [{ tx: placing.tx, ty: placing.ty }];
+    }
+    const tiles: Array<{ tx: number; ty: number }> = [];
+    let x = placing.startTx;
+    let y = placing.startTy;
+    const dx = Math.sign(placing.tx - x);
+    const dy = Math.sign(placing.ty - y);
+    while (tiles.length < 32) {
+      tiles.push({ tx: x, ty: y });
+      if (x === placing.tx && y === placing.ty) break;
+      if (Math.abs(placing.tx - x) >= Math.abs(placing.ty - y)) x += dx;
+      else y += dy;
+    }
+    return tiles;
+  }
+
   private drawPlacement(): void {
     const placing = this.placing;
     this.ghost.setVisible(placing !== null);
@@ -796,10 +896,17 @@ export class GameScene extends Phaser.Scene {
     this.ghost.setTexture(`${placing.kind}-${this.player}`);
     this.ghost.setPosition(placing.tx * TILE, placing.ty * TILE);
     this.ghost.setAlpha(0.7);
-    this.top.fillStyle(ok ? OWN_HP : ENEMY_HP, 0.35);
-    this.top.fillRect(placing.tx * TILE, placing.ty * TILE, side, side);
-    this.top.lineStyle(1, ok ? OWN_HP : ENEMY_HP, 1);
-    this.top.strokeRect(placing.tx * TILE, placing.ty * TILE, side, side);
+    for (const pt of this.wallLineTiles(placing)) {
+      const tileOk = this.world.canPlace(placing.kind, pt.tx, pt.ty);
+      this.top.fillStyle(tileOk ? OWN_HP : ENEMY_HP, 0.35);
+      this.top.fillRect(pt.tx * TILE, pt.ty * TILE, side, side);
+      this.top.lineStyle(1, tileOk ? OWN_HP : ENEMY_HP, 1);
+      this.top.strokeRect(pt.tx * TILE, pt.ty * TILE, side, side);
+    }
+    if (!ok) {
+      this.top.lineStyle(1, ENEMY_HP, 1);
+      this.top.strokeRect(placing.tx * TILE, placing.ty * TILE, side, side);
+    }
   }
 
   private drawSelectionBox(): void {
@@ -952,11 +1059,23 @@ export class GameScene extends Phaser.Scene {
       return [{ id: 'restart', label: 'Joacă din nou', enabled: true, primary: true }];
     }
     if (this.placing) {
-      const ok = world.canPlace(this.placing.kind, this.placing.tx, this.placing.ty);
-      return [
-        { id: 'place:ok', label: 'Construiește aici', enabled: ok, primary: true },
-        { id: 'place:cancel', label: 'Renunță', enabled: true },
+      const isWall = this.placing.kind === 'zid' || this.placing.kind === 'poarta';
+      const lineStarted = this.placing.startTx !== undefined && this.placing.startTy !== undefined;
+      const tiles = this.wallLineTiles(this.placing);
+      const anyOk = tiles.some((pt) => world.canPlace(this.placing!.kind, pt.tx, pt.ty));
+      const buttons: ActionButton[] = [
+        {
+          id: 'place:ok',
+          label: lineStarted ? `Construiește șirul (${tiles.length})` : 'Construiește aici',
+          enabled: anyOk,
+          primary: true,
+        },
       ];
+      if (isWall && !lineStarted) {
+        buttons.push({ id: 'place:line', label: 'Trage șir de aici', enabled: anyOk });
+      }
+      buttons.push({ id: 'place:cancel', label: 'Renunță', enabled: true });
+      return buttons;
     }
     const units = this.selected();
     const peasantsSelected = units.filter((u) => u.kind === 'taran').length;
@@ -980,6 +1099,14 @@ export class GameScene extends Phaser.Scene {
 
     const buttons: ActionButton[] = [];
     if (hasPeasant) buttons.push({ id: 'menu:build', label: 'Construiește…', enabled: true, primary: true });
+    if (fightersSelected > 0) {
+      buttons.push({
+        id: 'mode:attackMove',
+        label: this.attackMoveMode ? 'Atacă în drum (atinge harta)' : 'Atacă în drum',
+        enabled: true,
+        primary: this.attackMoveMode,
+      });
+    }
 
     const building = this.selectedBuilding === null ? undefined : world.getBuilding(this.selectedBuilding);
     if (building && building.faction === player) {
@@ -993,6 +1120,34 @@ export class GameScene extends Phaser.Scene {
           enabled: world.canTrain(player, building, kind),
         });
       }
+      if (building.done && BUILDINGS[building.kind].trains.length > 0) {
+        buttons.push({
+          id: 'mode:rally',
+          label: this.rallyMode ? 'Alege adunarea…' : 'Punct de adunare',
+          detail: building.rally ? `${building.rally.tx},${building.rally.ty}` : undefined,
+          enabled: true,
+          primary: this.rallyMode,
+        });
+      }
+      if (building.queue.length > 0) {
+        buttons.push({
+          id: 'queue:cancel',
+          label: 'Anulează rândul',
+          detail: `${building.queue.length}`,
+          enabled: true,
+        });
+      }
+      for (const tech of world.availableTechs(building)) {
+        const costParts: string[] = [];
+        if (tech.costLemn > 0) costParts.push(`${tech.costLemn} lemn`);
+        if (tech.costPrune > 0) costParts.push(`${tech.costPrune} ${this.food}`);
+        buttons.push({
+          id: `research:${tech.id}`,
+          label: tech.name,
+          detail: costParts.join(', '),
+          enabled: world.canResearch(player, building, tech.id),
+        });
+      }
       const next = ERAS[world.era[player] + 1];
       if (building.kind === 'curte' && next && building.advanceLeft === 0) {
         buttons.push({
@@ -1002,7 +1157,11 @@ export class GameScene extends Phaser.Scene {
           enabled: world.canAdvance(player),
         });
       }
-      const busy = !building.done || building.queue.length > 0 || building.advanceLeft > 0;
+      const busy =
+        !building.done ||
+        building.queue.length > 0 ||
+        building.advanceLeft > 0 ||
+        (building.researchLeft ?? 0) > 0;
       if (world.era[player] >= BRIBE_ERA && busy) {
         buttons.push({
           id: 'bribe',
@@ -1095,30 +1254,56 @@ export class GameScene extends Phaser.Scene {
     } else if (id.startsWith('build:')) {
       this.buildMenuOpen = false;
       this.startPlacing(id.slice('build:'.length) as BuildingKind);
+    } else if (id === 'place:line' && this.placing) {
+      this.placing.startTx = this.placing.tx;
+      this.placing.startTy = this.placing.ty;
+      this.hud.toast('Atinge capătul șirului pe hartă, apoi „Construiește șirul”.', this.time.now);
     } else if (id === 'place:ok') {
       this.confirmPlacing();
     } else if (id === 'place:cancel') {
       this.placing = null;
       this.hud.hideToast();
+    } else if (id === 'mode:attackMove') {
+      this.attackMoveMode = !this.attackMoveMode;
+      this.rallyMode = false;
+      if (this.attackMoveMode) this.hud.toast('Atinge pe hartă unde să mărșăluiască și să atace.', this.time.now);
+      else this.hud.hideToast();
+    } else if (id === 'mode:rally') {
+      this.rallyMode = !this.rallyMode;
+      this.attackMoveMode = false;
+      if (this.rallyMode) this.hud.toast('Atinge pe hartă locul de adunare.', this.time.now);
+      else this.hud.hideToast();
+    } else if (id === 'queue:cancel' && building !== null) {
+      this.issue({ type: 'cancelQueue', faction: player, buildingId: building });
+    } else if (id.startsWith('research:') && building !== null) {
+      const techId = id.slice('research:'.length) as TechId;
+      const def = TECHS[techId];
+      let targetFaction: FactionId | undefined;
+      if (def?.isDebuff) {
+        const enemies = this.world.alive().filter((f) => f !== player);
+        targetFaction = enemies.find((f) => f === FACTIONS[player].rival) ?? enemies[0];
+      }
+      this.issue({ type: 'research', faction: player, buildingId: building, techId, targetFaction });
     } else if (id.startsWith('train:') && building !== null) {
       const kind = id.slice('train:'.length) as UnitKind;
-      this.world.issue({ type: 'train', faction: player, buildingId: building, kind });
+      this.issue({ type: 'train', faction: player, buildingId: building, kind });
     } else if (id === 'advance') {
-      this.world.issue({ type: 'advance', faction: player });
+      this.issue({ type: 'advance', faction: player });
     } else if (id === 'bribe' && building !== null) {
-      this.world.issue({ type: 'bribe', faction: player, buildingId: building });
+      this.issue({ type: 'bribe', faction: player, buildingId: building });
     } else if (id === 'ability') {
       this.useAbility();
     } else if (id === 'deselect') {
       this.selectedUnits.clear();
       this.buildMenuOpen = false;
+      this.attackMoveMode = false;
     }
   }
 
   private answerHaraci(pay: boolean): void {
     const owed = this.world.haraci[this.player];
     if (owed.due <= 0) return;
-    this.world.issue({ type: 'haraci', faction: this.player, pay });
+    this.issue({ type: 'haraci', faction: this.player, pay });
     this.hud.hideToast();
     if (!pay) {
       const text = 'Muie Baiazid!';
@@ -1133,7 +1318,7 @@ export class GameScene extends Phaser.Scene {
     const now = this.time.now;
     const ability = FACTIONS[player].ability.id;
     if (ability !== 'taunt') {
-      this.world.issue({ type: 'ability', faction: player });
+      this.issue({ type: 'ability', faction: player });
       if (ability === 'palinca') {
         this.hud.toast('Stau cu toții la o pălincă. După aia merge treaba mai bine.', now, 4000);
       }
@@ -1147,7 +1332,7 @@ export class GameScene extends Phaser.Scene {
     const taunter =
       soldiers.find((u) => this.selectedUnits.has(u.id)) ??
       soldiers.sort((a, b) => trouble(a) - trouble(b) || a.id - b.id)[0];
-    if (taunter) this.world.issue({ type: 'ability', faction: player, unitId: taunter.id });
+    if (taunter) this.issue({ type: 'ability', faction: player, unitId: taunter.id });
   }
 
   private startPlacing(kind: BuildingKind): void {
@@ -1165,16 +1350,29 @@ export class GameScene extends Phaser.Scene {
 
   private confirmPlacing(): void {
     const placing = this.placing;
-    if (!placing || !this.world.canPlace(placing.kind, placing.tx, placing.ty)) return;
+    if (!placing) return;
+    const tiles = this.wallLineTiles(placing).filter((pt) => this.world.canPlace(placing.kind, pt.tx, pt.ty));
+    if (tiles.length === 0) return;
     const builders = this.selected().filter((u) => u.kind === 'taran');
-    this.world.issue({
-      type: 'build',
-      faction: this.player,
-      unitIds: builders.map((u) => u.id),
-      kind: placing.kind,
-      tx: placing.tx,
-      ty: placing.ty,
-    });
+    if (tiles.length > 1 && (placing.kind === 'zid' || placing.kind === 'poarta')) {
+      this.issue({
+        type: 'buildLine',
+        faction: this.player,
+        unitIds: builders.map((u) => u.id),
+        kind: placing.kind,
+        tiles: tiles.map((pt) => [pt.tx, pt.ty] as const),
+      });
+    } else {
+      const first = tiles[0]!;
+      this.issue({
+        type: 'build',
+        faction: this.player,
+        unitIds: builders.map((u) => u.id),
+        kind: placing.kind,
+        tx: first.tx,
+        ty: first.ty,
+      });
+    }
     this.speak(builders[0], 'build', this.time.now);
     this.placing = null;
     this.hud.hideToast();
@@ -1194,7 +1392,25 @@ export class GameScene extends Phaser.Scene {
     }
     this.buildMenuOpen = false;
 
+    if (this.rallyMode && this.selectedBuilding !== null && this.world.map.inBounds(tx, ty)) {
+      this.issue({ type: 'rally', faction: this.player, buildingId: this.selectedBuilding, tx, ty });
+      this.rallyMode = false;
+      this.sfx.play('order');
+      this.markers.push({ x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, bornAt: now });
+      this.hud.hideToast();
+      return;
+    }
+
     const unitIds = [...this.selectedUnits];
+    if (this.attackMoveMode && unitIds.length > 0 && this.world.map.inBounds(tx, ty)) {
+      this.issue({ type: 'attackMove', faction: this.player, unitIds, tx, ty });
+      this.attackMoveMode = false;
+      this.sfx.play('order');
+      this.markers.push({ x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, bornAt: now });
+      this.speak(this.world.getUnit(unitIds[0]!), 'attack', now);
+      this.hud.hideToast();
+      return;
+    }
     const unit = this.unitNear(worldX, worldY);
     if (unit && unit.faction !== this.player) {
       if (unitIds.length === 0) {

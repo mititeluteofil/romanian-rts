@@ -460,7 +460,8 @@ body {
   opacity: 0.9;
 }
 
-#menu-mode {
+#menu-mode,
+#menu-map-size {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -473,7 +474,8 @@ body {
   cursor: pointer;
 }
 
-#menu-mode input {
+#menu-mode input,
+#menu-map-size input {
   width: 22px;
   height: 22px;
   flex: none;

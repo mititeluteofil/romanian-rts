@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import type { Difficulty } from './ai/skirmish';
 import { SoundEngine } from './audio/sound';
-import { FACTION_IDS, FACTIONS, type FactionId } from './data/factions';
+import { FACTIONS, PLAYABLE_FACTION_IDS, type FactionId } from './data/factions';
 import { GameScene } from './render/GameScene';
 import { formatSaveSummary, loadGame, type SaveGame } from './save';
 import './ui/hud.css';
@@ -10,7 +10,14 @@ const sound = new SoundEngine();
 let activeGame: Phaser.Game | null = null;
 let selectedDifficulty: Difficulty = 'normal';
 
-function launch(options: { player: FactionId; peaceful: boolean; difficulty?: Difficulty; save?: SaveGame }): void {
+function launch(options: {
+  player: FactionId;
+  peaceful: boolean;
+  difficulty?: Difficulty;
+  mapScale?: number;
+  includeOltenia?: boolean;
+  save?: SaveGame;
+}): void {
   sound.unlock();
   document.getElementById('menu')?.classList.add('hidden');
   activeGame?.destroy(true);
@@ -90,9 +97,10 @@ function showMenu(): void {
 
   const list = document.getElementById('menu-factions');
   const peace = document.getElementById('menu-peace') as HTMLInputElement | null;
+  const mapLarge = document.getElementById('menu-map-large') as HTMLInputElement | null;
   if (!list) return;
   list.replaceChildren();
-  for (const id of FACTION_IDS) {
+  for (const id of PLAYABLE_FACTION_IDS) {
     const faction = FACTIONS[id];
     const button = document.createElement('button');
     button.type = 'button';
@@ -105,9 +113,16 @@ function showMenu(): void {
     add('strong', faction.name);
     add('em', faction.motto);
     add('span', `${faction.ability.name}: ${faction.ability.description}`);
-    button.addEventListener('click', () =>
-      launch({ player: id, peaceful: peace?.checked ?? false, difficulty: selectedDifficulty }),
-    );
+    button.addEventListener('click', () => {
+      const isLarge = Boolean(mapLarge?.checked);
+      launch({
+        player: id,
+        peaceful: peace?.checked ?? false,
+        difficulty: selectedDifficulty,
+        mapScale: isLarge ? 1.5 : 1,
+        includeOltenia: id === 'oltenia' || isLarge,
+      });
+    });
     list.appendChild(button);
   }
 }
@@ -121,8 +136,16 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 // "?faction=moldova" skips the menu and "&peace=1" keeps the neighbour quiet
 // (handy while developing).
 const params = new URLSearchParams(location.search);
-const preset = FACTION_IDS.find((id) => id === params.get('faction'));
+const preset = PLAYABLE_FACTION_IDS.find((id) => id === params.get('faction'));
 const diffParam = params.get('difficulty');
 const diff: Difficulty = diffParam === 'usor' || diffParam === 'greu' ? diffParam : 'normal';
-if (preset) launch({ player: preset, peaceful: params.get('peace') === '1', difficulty: diff });
-else showMenu();
+if (preset) {
+  const isLarge = params.get('large') === '1';
+  launch({
+    player: preset,
+    peaceful: params.get('peace') === '1',
+    difficulty: diff,
+    mapScale: isLarge ? 1.5 : 1,
+    includeOltenia: preset === 'oltenia' || isLarge,
+  });
+} else showMenu();

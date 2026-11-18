@@ -214,6 +214,8 @@ export function buildUnitSheet(faction: FactionDef, kind: UnitKind): HTMLCanvasE
   const { canvas, ctx } = makeCanvas(TILE * UNIT_FRAMES.length, TILE);
   const soldier = kind === 'ostas';
   const smecher = kind === 'smecher';
+  const stegar = kind === 'stegar';
+  const iscoada = kind === 'iscoada';
   const palette: Record<string, string> = smecher
     ? {
         // Tracksuit, white trainers; only the belt still says where he is from.
@@ -226,14 +228,14 @@ export function buildUnitSheet(faction: FactionDef, kind: UnitKind): HTMLCanvasE
         b: '#f2f2f2',
       }
     : {
-        h: hex(faction.hatColor),
+        h: iscoada ? '#3b4a36' : hex(faction.hatColor),
         s: '#e8b88a',
         e: '#1b1b1b',
         m: '#4a2f1a',
-        // Peasants wear the white shirt; soldiers a suman over it.
-        w: soldier ? hex(faction.coatColor) : '#f4f1e6',
+        // Peasants wear the white shirt; soldiers/stegar a suman over it; scouts a green/brown travel cloak.
+        w: soldier || stegar ? hex(faction.coatColor) : iscoada ? '#4a5d3a' : '#f4f1e6',
         f: hex(faction.color),
-        p: '#e2ddcc',
+        p: iscoada ? '#3a342a' : '#e2ddcc',
         b: '#4a2f1a',
       };
   const head = smecher ? SMECHER_HEAD : PEASANT_HEAD;
@@ -245,6 +247,21 @@ export function buildUnitSheet(faction: FactionDef, kind: UnitKind): HTMLCanvasE
   frames.forEach((rows, i) => {
     drawSprite(ctx, i * TILE, rows, palette);
     if (soldier) drawWeapon(ctx, i * TILE, faction, i === 2);
+    if (stegar) {
+      // Tall wooden pole and waving principality flag with gold finial.
+      const ox = i * TILE;
+      px(ctx, ox + 13, 1, '#5b3a1e', 1, 14);
+      px(ctx, ox + 13, 0, '#f2c230', 1, 1);
+      const wave = i === 1 ? 1 : 0;
+      px(ctx, ox + 14, 1 + wave, hex(faction.color), 2, 5);
+      px(ctx, ox + 15, 2 + wave, '#f2c230', 1, 2);
+    }
+    if (iscoada) {
+      // Feather in cap and brass spyglass/hunting horn.
+      const ox = i * TILE;
+      px(ctx, ox + 11, 1, hex(faction.color), 2, 1);
+      px(ctx, ox + 12, 8, '#c9a227', 3, 2);
+    }
     if (smecher) {
       // Gold chain, and white stripes down the sleeves.
       px(ctx, i * TILE + 7, 8, '#f2c230', 2, 1);
@@ -526,6 +543,78 @@ function drawMall(ctx: Ctx, faction: FactionDef): void {
   px(ctx, 35, 42, '#16161a', 5, 1);
 }
 
+function drawCasa(ctx: Ctx, faction: FactionDef): void {
+  // 32×32 traditional peasant cottage: whitewashed walls, shingle roof, wooden porch & flower box.
+  px(ctx, 3, 27, '#3c5a2a', 26, 3);
+  px(ctx, 4, 14, '#efe9d8', 24, 14);
+  px(ctx, 4, 26, '#8d8778', 24, 2);
+  for (let row = 0; row < 10; row++) {
+    const inset = Math.max(0, 5 - Math.floor(row / 2));
+    px(ctx, 2 + inset, 5 + row, row % 2 === 0 ? '#6e3f1d' : '#583015', 28 - inset * 2, 1);
+  }
+  px(ctx, 21, 2, '#7d776a', 3, 4); // chimney
+  px(ctx, 14, 19, '#4a2f1a', 4, 8); // door
+  px(ctx, 7, 18, '#3b4a5a', 4, 4); // left window
+  px(ctx, 21, 18, '#3b4a5a', 4, 4); // right window
+  px(ctx, 7, 22, hex(faction.color), 4, 1); // painted sill
+  px(ctx, 21, 22, hex(faction.color), 4, 1);
+}
+
+function drawHan(ctx: Ctx, faction: FactionDef): void {
+  // 32×32 wayside inn: timber beams, red tile roof, hanging sign & wine barrel.
+  px(ctx, 2, 27, '#3c5a2a', 28, 3);
+  px(ctx, 3, 13, '#e4d5b7', 26, 15);
+  px(ctx, 3, 20, '#5b3a1e', 26, 1);
+  for (let row = 0; row < 9; row++) {
+    const inset = Math.max(0, 4 - Math.floor(row / 2));
+    px(ctx, 1 + inset, 4 + row, row % 2 === 0 ? '#963a22' : '#7d2f1a', 30 - inset * 2, 1);
+  }
+  // arched stable/inn doorway & barrels
+  px(ctx, 13, 19, '#3a2210', 6, 9);
+  px(ctx, 6, 16, '#f2d46a', 4, 3);
+  px(ctx, 22, 16, '#f2d46a', 4, 3);
+  px(ctx, 6, 23, '#7a4a21', 4, 4); // wine cask
+  // hanging tavern sign
+  px(ctx, 28, 14, '#3a2210', 3, 1);
+  px(ctx, 29, 15, hex(faction.color), 2, 3);
+}
+
+function drawTurn(ctx: Ctx, faction: FactionDef): void {
+  // 32×32 wooden & stone watchtower with lookout gallery and faction pennon.
+  px(ctx, 6, 27, '#3c5a2a', 20, 3);
+  px(ctx, 9, 18, '#8d8778', 14, 10); // stone base
+  px(ctx, 10, 9, '#6b4423', 12, 10); // timber shaft
+  px(ctx, 7, 7, '#4a2f1a', 18, 3); // overhanging gallery
+  px(ctx, 10, 10, '#1b1b1b', 3, 3); // lookout slit
+  px(ctx, 19, 10, '#1b1b1b', 3, 3);
+  for (let row = 0; row < 5; row++) {
+    px(ctx, 7 + row, 2 + row, '#583015', 18 - row * 2, 1);
+  }
+  px(ctx, 15, 0, '#3a2210', 1, 3);
+  px(ctx, 16, 0, hex(faction.color), 4, 2);
+}
+
+function drawZid(ctx: Ctx): void {
+  // 16×16 timber & stone palisade wall segment.
+  px(ctx, 0, 13, '#3c5a2a', 16, 3);
+  px(ctx, 1, 9, '#8d8778', 14, 5); // stone base
+  for (let x = 1; x < 14; x += 3) {
+    px(ctx, x, 2, '#6b4423', 2, 8);
+    px(ctx, x, 1, '#8c5a32', 2, 1);
+  }
+  px(ctx, 1, 6, '#4a2f1a', 14, 1); // crossbeam
+}
+
+function drawPoarta(ctx: Ctx, faction: FactionDef): void {
+  // 16×16 arched gatehouse segment with faction shield above the arch.
+  px(ctx, 0, 13, '#6e6a5f', 16, 3);
+  px(ctx, 0, 2, '#7d776a', 4, 12); // left pillar
+  px(ctx, 12, 2, '#7d776a', 4, 12); // right pillar
+  px(ctx, 0, 1, '#5b3a1e', 16, 3); // lintel roof
+  px(ctx, 4, 4, '#3a2210', 8, 2); // arch top
+  px(ctx, 6, 1, hex(faction.color), 4, 2); // faction crest
+}
+
 /** Image for a building; faction only matters for the banners. */
 export function buildBuildingTexture(
   kind: BuildingKind,
@@ -558,6 +647,21 @@ export function buildBuildingTexture(
       break;
     case 'mall':
       drawMall(ctx, faction);
+      break;
+    case 'casa':
+      drawCasa(ctx, faction);
+      break;
+    case 'han':
+      drawHan(ctx, faction);
+      break;
+    case 'turn':
+      drawTurn(ctx, faction);
+      break;
+    case 'zid':
+      drawZid(ctx);
+      break;
+    case 'poarta':
+      drawPoarta(ctx, faction);
       break;
   }
   return canvas;
