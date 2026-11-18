@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { clipForLine, shouldPlayVoice, SoundEngine, type VoiceLineContext } from '../src/audio/sound';
 import { BUILDINGS } from '../src/data/buildings';
-import { formatSaveSummary, loadGame } from '../src/save';
+import {
+  clearSave,
+  DEFAULT_NICKNAME,
+  formatSaveSummary,
+  loadGame,
+  loadNickname,
+  sanitizeNickname,
+  saveGame,
+  saveNickname,
+} from '../src/save';
 import { PLACES, Region } from '../src/data/romania';
 import { GameMap, generateRomania, latToY, lonToX, placeTile, Terrain } from '../src/sim/map';
 import { findPath, nearestPassable, nearestTile } from '../src/sim/pathfinding';
@@ -1454,5 +1463,58 @@ describe('milestone 7 and extra features', () => {
     for (let i = 0; i < 20; i++) world.step();
     expect(world.getBuilding(tower.id)).toBeUndefined();
     expect(world.getUnit(p2.id)).toBeDefined();
+  });
+
+  it('supports player nickname with default fallback and deleting a solo saved game', () => {
+    expect(sanitizeNickname('')).toBe(DEFAULT_NICKNAME);
+    expect(sanitizeNickname('   ')).toBe(DEFAULT_NICKNAME);
+    expect(sanitizeNickname('  Vlad   Țepeș  ')).toBe('Vlad Țepeș');
+
+    // Mock window.localStorage to test saveNickname, loadNickname, saveGame, loadGame, and clearSave
+    const store = new Map<string, string>();
+    const prevWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window: unknown }).window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+    };
+    try {
+      expect(loadNickname()).toBe(DEFAULT_NICKNAME);
+      expect(saveNickname('Ștefan')).toBe('Ștefan');
+      expect(loadNickname()).toBe('Ștefan');
+      expect(saveNickname('')).toBe(DEFAULT_NICKNAME);
+      expect(loadNickname()).toBe(DEFAULT_NICKNAME);
+
+      const world = new World({ seed: 1600, includeOltenia: true });
+      const savedOk = saveGame({
+        version: 1,
+        savedAt: 1000,
+        player: 'oltenia',
+        nickname: 'Tudor',
+        peaceful: false,
+        difficulty: 'greu',
+        goalReached: false,
+        lost: false,
+        taxed: false,
+        camera: { x: 100, y: 100, zoom: 2 },
+        world: world.toSnapshot(),
+        ais: [],
+      });
+      expect(savedOk).toBe(true);
+      const loaded = loadGame();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.player).toBe('oltenia');
+      expect(loaded!.nickname).toBe('Tudor');
+      expect(formatSaveSummary(loaded!)).toContain('Tudor · Oltenia');
+
+      // Delete solo saved game explicitly
+      clearSave();
+      expect(loadGame()).toBeNull();
+    } finally {
+      if (prevWindow === undefined) delete (globalThis as { window?: unknown }).window;
+      else (globalThis as { window: unknown }).window = prevWindow;
+    }
   });
 });

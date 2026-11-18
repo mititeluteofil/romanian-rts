@@ -18,7 +18,7 @@ import {
 import { REGION_NAMES } from '../data/romania';
 import { CameraControls, type WorldRect } from '../input/CameraControls';
 import type { CommandSink } from '../net/lockstep';
-import { clearSave, saveGame, type SaveGame } from '../save';
+import { clearSave, loadNickname, sanitizeNickname, saveGame, type SaveGame } from '../save';
 import { nearestTile } from '../sim/pathfinding';
 import { hash2 } from '../sim/rng';
 import {
@@ -62,6 +62,8 @@ const UNIT_KINDS: readonly UnitKind[] = ['taran', 'ostas', 'smecher', 'stegar', 
 export interface GameOptions {
   /** The faction the person at this device plays; the AI takes the others. */
   readonly player: FactionId;
+  /** Optional player nickname (falls back to saved nickname or "Voievod"). */
+  readonly nickname?: string;
   /** Quiet neighbour: no war, the goal is to reach the present and open a mall. */
   readonly peaceful: boolean;
   readonly difficulty?: Difficulty;
@@ -99,6 +101,7 @@ function pick<T>(items: readonly T[]): T {
 /** Draws the world and turns taps and button presses into simulation commands. */
 export class GameScene extends Phaser.Scene {
   private readonly player: FactionId;
+  private readonly nickname: string;
   private readonly peaceful: boolean;
   private readonly difficulty: Difficulty;
   private readonly mapScale: number;
@@ -150,6 +153,7 @@ export class GameScene extends Phaser.Scene {
   constructor(options: GameOptions) {
     super('game');
     this.player = options.player;
+    this.nickname = sanitizeNickname(options.nickname ?? options.save?.nickname ?? loadNickname());
     this.peaceful = options.peaceful;
     this.difficulty = options.save?.difficulty ?? options.difficulty ?? 'normal';
     this.mapScale = options.mapScale ?? 1;
@@ -230,6 +234,11 @@ export class GameScene extends Phaser.Scene {
       onMenu: () => {
         this.sfx.unlock();
         if (!this.lost && this.world.winner === null) this.persistSave();
+        this.onReturnToMenu?.();
+      },
+      onAbandon: () => {
+        this.sfx.unlock();
+        clearSave();
         this.onReturnToMenu?.();
       },
     });
@@ -437,6 +446,7 @@ export class GameScene extends Phaser.Scene {
       version: 1,
       savedAt: Date.now(),
       player: this.player,
+      nickname: this.nickname,
       peaceful: this.peaceful,
       difficulty: this.difficulty,
       goalReached: this.goalReached,
@@ -985,7 +995,7 @@ export class GameScene extends Phaser.Scene {
       Math.floor((view.y + view.height / 2) / TILE),
     );
     const era = ERAS[world.era[player]]!;
-    this.hud.setTitle(`${REGION_NAMES[region]} · ${era.name}, ${era.year}`);
+    this.hud.setTitle(`${this.nickname} · ${REGION_NAMES[region]} · ${era.name}, ${era.year}`);
     this.hud.setStock(
       `Lemn ${stock.lemn} · ${FACTIONS[player].foodName} ${stock.prune} · ` +
         (this.drinks ? `Pălincă ${stock.palinca} · ` : '') +
@@ -1032,7 +1042,7 @@ export class GameScene extends Phaser.Scene {
     }
     const courts = world
       .alive()
-      .map((f) => `${f === this.player ? 'a ta' : FACTIONS[f].name} ${world.courtOf(f)?.hp ?? 0}`)
+      .map((f) => `${f === this.player ? `${this.nickname} (a ta)` : FACTIONS[f].name} ${world.courtOf(f)?.hp ?? 0}`)
       .join(' · ');
     return `Țel: rămâi ultimul cu curtea în picioare. Curți: ${courts}`;
   }

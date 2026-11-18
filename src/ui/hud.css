@@ -120,9 +120,10 @@ body {
   top: 50%;
   transform: translate(-50%, -50%);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: 10px;
+  padding: 12px 18px;
   background: var(--panel);
   border: 2px solid var(--edge);
   pointer-events: auto;
@@ -134,6 +135,19 @@ body {
 
 #pause-banner.hidden {
   display: none;
+}
+
+#pause-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  letter-spacing: normal;
+}
+
+#pause-actions button.danger {
+  background: #6b221e;
+  border-color: #e57373;
 }
 
 #info {
@@ -392,6 +406,8 @@ body {
 }
 
 #menu-continue {
+  display: grid;
+  gap: 8px;
   margin: 12px 0;
 }
 
@@ -410,6 +426,40 @@ body {
   text-align: left;
   cursor: pointer;
   touch-action: manipulation;
+}
+
+#menu-continue button.delete-save-btn {
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: bold;
+  text-align: center;
+  background: #5a221e;
+  border-color: #e57373;
+  color: #ffcdd2;
+}
+
+#menu-nick-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--edge);
+  background: #2c2f26;
+  font-size: 13px;
+  text-align: left;
+}
+
+#menu-nick-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: #1b2218;
+  border: 1px solid var(--edge);
 }
 
 #menu-continue button strong {

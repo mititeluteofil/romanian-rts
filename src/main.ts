@@ -3,7 +3,16 @@ import type { Difficulty } from './ai/skirmish';
 import { SoundEngine } from './audio/sound';
 import { FACTIONS, PLAYABLE_FACTION_IDS, type FactionId } from './data/factions';
 import { GameScene } from './render/GameScene';
-import { formatSaveSummary, loadGame, type SaveGame } from './save';
+import {
+  clearSave,
+  DEFAULT_NICKNAME,
+  formatSaveSummary,
+  loadGame,
+  loadNickname,
+  NICKNAME_KEY,
+  saveNickname,
+  type SaveGame,
+} from './save';
 import './ui/hud.css';
 
 const sound = new SoundEngine();
@@ -12,6 +21,7 @@ let selectedDifficulty: Difficulty = 'normal';
 
 function launch(options: {
   player: FactionId;
+  nickname?: string;
   peaceful: boolean;
   difficulty?: Difficulty;
   mapScale?: number;
@@ -69,9 +79,29 @@ function wireDifficultyButtons(): void {
   });
 }
 
-/** Faction picker (plus Continue if a saved match exists). */
+function wireNicknameInput(): HTMLInputElement | null {
+  const input = document.getElementById('menu-nickname') as HTMLInputElement | null;
+  if (!input) return null;
+  input.placeholder = `${DEFAULT_NICKNAME} (implicit)`;
+  try {
+    const raw = window.localStorage.getItem(NICKNAME_KEY);
+    if (raw) input.value = raw;
+  } catch {
+    // ignore storage errors
+  }
+  if (!input.dataset.wired) {
+    input.dataset.wired = '1';
+    input.addEventListener('change', () => {
+      saveNickname(input.value);
+    });
+  }
+  return input;
+}
+
+/** Faction picker (plus Continue / Delete if a saved match exists). */
 function showMenu(): void {
   wireDifficultyButtons();
+  const nickInput = wireNicknameInput();
 
   const cont = document.getElementById('menu-continue');
   const saved = loadGame();
@@ -79,17 +109,34 @@ function showMenu(): void {
     cont.replaceChildren();
     if (saved) {
       cont.classList.remove('hidden');
-      const button = document.createElement('button');
-      button.type = 'button';
+      const resumeBtn = document.createElement('button');
+      resumeBtn.type = 'button';
+      resumeBtn.id = 'btn-continue-save';
+      resumeBtn.className = 'continue-btn';
       const title = document.createElement('strong');
       title.textContent = 'Continuă partida';
       const detail = document.createElement('span');
       detail.textContent = formatSaveSummary(saved);
-      button.append(title, detail);
-      button.addEventListener('click', () =>
-        launch({ player: saved.player, peaceful: saved.peaceful, save: saved }),
-      );
-      cont.appendChild(button);
+      resumeBtn.append(title, detail);
+      resumeBtn.addEventListener('click', () => {
+        const nick = nickInput?.value.trim() ? saveNickname(nickInput.value) : (saved.nickname ?? loadNickname());
+        launch({ player: saved.player, nickname: nick, peaceful: saved.peaceful, save: saved });
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.id = 'btn-delete-save';
+      deleteBtn.className = 'delete-save-btn';
+      deleteBtn.textContent = 'Închide / Șterge partida';
+      deleteBtn.addEventListener('click', () => {
+        sound.unlock();
+        sound.play('select');
+        clearSave();
+        cont.replaceChildren();
+        cont.classList.add('hidden');
+      });
+
+      cont.append(resumeBtn, deleteBtn);
     } else {
       cont.classList.add('hidden');
     }
@@ -115,8 +162,11 @@ function showMenu(): void {
     add('span', `${faction.ability.name}: ${faction.ability.description}`);
     button.addEventListener('click', () => {
       const isLarge = Boolean(mapLarge?.checked);
+      const nickname = saveNickname(nickInput?.value);
+      clearSave();
       launch({
         player: id,
+        nickname,
         peaceful: peace?.checked ?? false,
         difficulty: selectedDifficulty,
         mapScale: isLarge ? 1.5 : 1,
