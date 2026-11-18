@@ -25,7 +25,7 @@ Instead of treating all opponents identically, each principality pair has tailor
 - **Classic Rivalry Pairs**:
   - **Moldova ↔ București (Țara Românească)**: Banter over pretentious city builds (*„Da boss, facem!”*) vs stubborn refusal to rush (*„Și vrei uăi?!”*).
   - **București ↔ Ardeal**: Speed-obsessed hustlers (*„facem Jănică”*) clashing with unhurried thinkers (*„No, numai bine bem o pălincă”*).
-  - **Ardeal ↔ Moldova**: Contrasting work rhythms (*„Neamțu' doarme”* vs peasants caught in idle loops).
+  - **Ardeal ↔ Moldova**: Contrasting work rhythms (*„Nem tudom”* vs peasants caught in idle loops).
   - **Oltenia ↔ Toată lumea**: Spicy universal trash-talk lines triggered whenever Oltenian scouts or armies cross into *any* other principality's territory.
 - **Gameplay Hooks for Rivalries**:
   - **Contextual Rivalry Speech Bubbles**: Units spotting a specific rival faction pick from pair-specific banter instead of generic fight lines.
@@ -36,7 +36,7 @@ Instead of treating all opponents identically, each principality pair has tailor
 ## 2. Faction-Specific Satire Mechanics (Balanced for Fun Play)
 
 - **Ardeal — Two Peasant Archetypes & „Clepsidra”**:
-  - Flavor nod to the audio's two Ardeal peasant jokes: the drowsy scout/villager (*„Neamțu' doarme”* — *„Atunci ce cauți pe harta mea?!”*) and the thoughtful *Clepsidră* (hourglass) builder (*„Înainte de muncă... no mai bine ne cunoaștem, bem o pălincă, și mâine după o cafă ne apucăm!”*).
+  - Flavor nod to the audio's two Ardeal peasant jokes: the clueless *„Nem tudom”* villager (*„Atunci ce cauți pe harta mea?!”*) and the thoughtful *Clepsidră* (hourglass) builder (*„Înainte de muncă... no mai bine ne cunoaștem, bem o pălincă, și mâine după o cafă ne apucăm!”*).
   - **Balanced Implementation**: Short ~2.5s hourglass warm-up only on their *first* big order or idle wake-up, followed by a compensated **„Chibzuit și odihnit”** burst (`+30%` build/gather rate for the next 15s) so net pacing matches other factions.
 - **Moldova — Idle „Lemmings Loop” & „1000-Click” Gag**:
   - In the audio, neglected Moldovan peasants crowd into a comical infinite loop (*„Hai bă, viniți încoa'! Hai că-ncolo-i Ardealu'! Lemmings!”*) or demand endless clicking before showing *„Fă o cocioabă”*.

@@ -14,8 +14,16 @@ export interface ActionButton {
   readonly primary?: boolean;
 }
 
+export interface HaraciPrompt {
+  readonly amount: number;
+  readonly food: string;
+  readonly secondsLeft: number;
+  readonly canPay: boolean;
+}
+
 export interface HudCallbacks {
   readonly onAction: (id: string) => void;
+  readonly onHaraci: (pay: boolean) => void;
   readonly onBoxSelect: () => void;
   readonly onIdlePeasant: () => void;
   readonly onPause: () => void;
@@ -55,6 +63,11 @@ export class Hud {
   private readonly menuBtn = byId<HTMLButtonElement>('btn-menu');
   private readonly pauseBanner = byId<HTMLDivElement>('pause-banner');
   private readonly resumeBtn = byId<HTMLButtonElement>('btn-resume');
+  private readonly haraciBox = byId<HTMLDivElement>('haraci-box');
+  private readonly haraciText = byId<HTMLDivElement>('haraci-text');
+  private readonly haraciTimer = byId<HTMLDivElement>('haraci-timer');
+  private readonly haraciYesBtn = byId<HTMLButtonElement>('btn-haraci-yes');
+  private readonly haraciNoBtn = byId<HTMLButtonElement>('btn-haraci-no');
   private readonly bubbles = new Map<string, Bubble>();
   private readonly ac = new AbortController();
   private actionsKey = '';
@@ -78,6 +91,8 @@ export class Hud {
     this.saveBtn.addEventListener('click', () => callbacks.onSave(), { signal });
     this.muteBtn.addEventListener('click', () => callbacks.onMute(), { signal });
     this.menuBtn.addEventListener('click', () => callbacks.onMenu(), { signal });
+    this.haraciYesBtn.addEventListener('click', () => callbacks.onHaraci(true), { signal });
+    this.haraciNoBtn.addEventListener('click', () => callbacks.onHaraci(false), { signal });
   }
 
   destroy(): void {
@@ -86,6 +101,7 @@ export class Hud {
     this.bubbles.clear();
     this.actions.replaceChildren();
     this.pauseBanner.classList.add('hidden');
+    this.haraciBox.classList.add('hidden');
     this.hideToast();
   }
 
@@ -136,6 +152,22 @@ export class Hud {
   setMuted(muted: boolean): void {
     Hud.set(this.muteBtn, muted ? 'Mut' : 'Sonor');
     this.muteBtn.classList.toggle('muted', muted);
+  }
+
+  /** Persistent corner prompt with live countdown and Yes / No tribute buttons. */
+  setHaraci(prompt: HaraciPrompt | null): void {
+    if (!prompt) {
+      this.haraciBox.classList.add('hidden');
+      this.haraciBox.classList.remove('urgent');
+      return;
+    }
+    this.haraciBox.classList.remove('hidden');
+    this.haraciBox.classList.toggle('urgent', prompt.secondsLeft <= 10);
+    Hud.set(this.haraciText, `Haraci Poartă: ${prompt.amount} ${prompt.food}`);
+    Hud.set(this.haraciTimer, `Timp rămas: ${prompt.secondsLeft} s`);
+    Hud.set(this.haraciYesBtn, 'Da, plătesc');
+    this.haraciYesBtn.disabled = !prompt.canPay;
+    Hud.set(this.haraciNoBtn, 'Nu plătesc');
   }
 
   /** Replace the action bar; rebuilt only when something actually changed. */

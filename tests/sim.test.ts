@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clipForLine, SoundEngine, type VoiceLineContext } from '../src/audio/sound';
+import { clipForLine, shouldPlayVoice, SoundEngine, type VoiceLineContext } from '../src/audio/sound';
 import { BUILDINGS } from '../src/data/buildings';
 import { formatSaveSummary, loadGame } from '../src/save';
 import { PLACES, Region } from '../src/data/romania';
@@ -1026,12 +1026,17 @@ describe('saves, crowd fan-out and voice hook', () => {
     expect(tiles.size).toBe(4);
   });
 
-  it('invokes the voice-line hook and formats save summaries', () => {
+  it('invokes the voice-line hook at 2/4 unit chatter rate and avoids repeating clips', () => {
     const sound = new SoundEngine();
     const heard: VoiceLineContext[] = [];
     sound.setVoiceHook((ctx) => heard.push(ctx));
-    sound.voice({ faction: 'ardeal', unitKind: 'taran', kind: 'select', text: 'No, ce-i?' });
+    sound.voice({ faction: 'ardeal', unitKind: 'taran', kind: 'select', text: 'No, ce-i?' }, () => 0.25);
+    sound.voice({ faction: 'ardeal', unitKind: 'taran', kind: 'select', text: 'No, ce-i?' }, () => 0.75);
     expect(heard).toEqual([{ faction: 'ardeal', unitKind: 'taran', kind: 'select', text: 'No, ce-i?' }]);
+
+    expect(shouldPlayVoice({ faction: 'ardeal', unitKind: 'taran', kind: 'move', text: 'x' }, () => 0.49)).toBe(true);
+    expect(shouldPlayVoice({ faction: 'ardeal', unitKind: 'taran', kind: 'move', text: 'x' }, () => 0.5)).toBe(false);
+    expect(shouldPlayVoice({ faction: 'moldova', unitKind: 'ostas', kind: 'taunt', text: 'x' }, () => 0.99)).toBe(true);
 
     const world = new World({ seed: 1600 });
     run(world, 650);
@@ -1051,11 +1056,26 @@ describe('saves, crowd fan-out and voice hook', () => {
     expect(summary).toContain('Fără război');
     expect(loadGame()).toBeNull();
 
-    expect(clipForLine({ faction: 'moldova', kind: 'select', text: 'Și vrei, wăi?' })).toMatch(/^moldova\/si-vrei-/);
+    const firstSiVrei = clipForLine({ faction: 'moldova', kind: 'select', text: 'Și vrei, wăi?' });
+    expect(firstSiVrei).toMatch(/^moldova\/si-vrei-/);
+    expect(
+      clipForLine({ faction: 'moldova', kind: 'select', text: 'Și vrei, wăi?' }, firstSiVrei),
+    ).not.toBe(firstSiVrei);
     expect(clipForLine({ faction: 'ardeal', kind: 'build', text: 'No, numai bine bem o pălincă…' })).toBe(
       'ardeal/palinca-hai.mp3',
     );
+    expect(clipForLine({ faction: 'ardeal', kind: 'select', text: 'Nem tudom.' })).toBe('ardeal/nem-tudom.mp3');
+    expect(clipForLine({ faction: 'ardeal', kind: 'select', text: 'Atunci ce cauți pe harta mea?!' })).toBe(
+      'ardeal/ce-cauti.mp3',
+    );
     expect(clipForLine({ faction: 'tara', kind: 'select', text: 'Da, boss!' })).toBe('tara/da-boss.mp3');
+    expect(clipForLine({ faction: 'tara', kind: 'wood', text: 'Hai să producem ceva pentru societate!' })).toBe(
+      'tara/hai-producem.mp3',
+    );
+    expect(clipForLine({ faction: 'moldova', kind: 'haraciRefuse', text: 'Muie Baiazid!' })).toBe(
+      'common/muie-baiazid.mp3',
+    );
+    expect(shouldPlayVoice({ faction: 'ardeal', kind: 'haraciRefuse', text: 'Muie Baiazid!' }, () => 0.99)).toBe(true);
   });
 
   it('supports AI difficulty presets and preserves them in snapshots', () => {
