@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { clipForLine, shouldPlayVoice, SoundEngine, type VoiceLineContext } from '../src/audio/sound';
 import { BUILDINGS } from '../src/data/buildings';
-import { formatSaveSummary, loadGame } from '../src/save';
+import {
+  clearSave,
+  DEFAULT_NICKNAME,
+  formatSaveSummary,
+  loadGame,
+  loadNickname,
+  sanitizeNickname,
+  saveGame,
+  saveNickname,
+} from '../src/save';
 import { PLACES, Region } from '../src/data/romania';
 import { GameMap, generateRomania, latToY, lonToX, placeTile, Terrain } from '../src/sim/map';
 import { findPath, nearestPassable, nearestTile } from '../src/sim/pathfinding';
@@ -1382,5 +1391,184 @@ describe('milestone 7 and extra features', () => {
     expect(sinkA.desynced).toBe(false);
     expect(sinkB.desynced).toBe(false);
     expect(worldA.checksum()).toBe(worldB.checksum());
+  });
+
+  it('allows villagers to garrison inside defensive buildings (turn and curte), boost firepower, and ungarrison back to work', () => {
+    const map = mapFromRows([
+      '..............ff',
+      '..............ff',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+      '................',
+    ]);
+    const world = new World({ seed: 1, map });
+    const court = world.placeBuilding('curte', 'ardeal', 1, 1, true);
+    const tower = world.placeBuilding('turn', 'ardeal', 6, 1, true);
+    const p1 = world.spawnUnit('ardeal', 5, 3, 'taran');
+    const p2 = world.spawnUnit('ardeal', 6, 3, 'taran');
+    const p3 = world.spawnUnit('ardeal', 2, 4, 'taran');
+
+    // Start p1 chopping wood and give p2 a load of plums so we verify resource drop-off & job resume
+    world.issue({ type: 'act', faction: 'ardeal', unitIds: [p1.id], tx: 14, ty: 0 });
+    world.step();
+    p2.carryKind = 'prune';
+    p2.carryAmount = 5;
+    const pruneBefore = world.stock.ardeal.prune;
+
+    // Tapping a finished watchtower describes target as 'garrison'
+    expect(world.describeTarget('ardeal', tower.tx, tower.ty)).toBe('garrison');
+    world.issue({ type: 'act', faction: 'ardeal', unitIds: [p1.id, p2.id], tx: tower.tx, ty: tower.ty });
+    // Garrison p3 inside the court (Town Bell / shelter in curte)
+    world.issue({ type: 'garrison', faction: 'ardeal', unitIds: [p3.id], buildingId: court.id });
+
+    for (let i = 0; i < 60; i++) world.step();
+    expect(world.garrisonCount(tower)).toBe(2);
+    expect(world.garrisonCount(court)).toBe(1);
+    // A tower is not a depot: the plums stay on p2's back instead of reaching the stock
+    expect(world.stock.ardeal.prune).toBe(pruneBefore);
+    // Garrisoned peasants still count toward faction unitCount
+    expect(world.unitCount('ardeal', 'taran')).toBe(3);
+    expect(world.units.filter((u) => u.faction === 'ardeal').length).toBe(0);
+
+    // Court with a garrisoned villager now fires defensively at nearby enemies!
+    const raiderNearCourt = world.spawnUnit('moldova', 2, 5, 'ostas');
+    const courtTargetHp = raiderNearCourt.hp;
+    for (let i = 0; i < 20; i++) world.step();
+    expect(raiderNearCourt.hp).toBeLessThan(courtTargetHp);
+    world.units.splice(world.units.indexOf(raiderNearCourt), 1);
+
+    // Snapshot round-trip preserves garrisoned villagers
+    const restored = World.fromSnapshot(world.toSnapshot());
+    expect(restored.garrisonCount(restored.getBuilding(tower.id)!)).toBe(2);
+    expect(restored.garrisonCount(restored.getBuilding(court.id)!)).toBe(1);
+
+    // Ungarrison from tower: p1 and p2 come back out, and p1 resumes chopping wood
+    world.issue({ type: 'ungarrison', faction: 'ardeal', buildingId: tower.id });
+    world.step();
+    expect(world.garrisonCount(tower)).toBe(0);
+    expect(world.units.filter((u) => u.faction === 'ardeal').length).toBe(2);
+    const restoredP1 = world.getUnit(p1.id)!;
+    expect(restoredP1.order.type).toBe('gather');
+    expect(world.getUnit(p2.id)!.carryAmount).toBe(5);
+    expect(world.getUnit(p2.id)!.carryKind).toBe('prune');
+
+    // If a defensive building with garrisoned villagers is destroyed, they survive and exit onto nearby tiles
+    tower.hp = 1;
+    world.issue({ type: 'garrison', faction: 'ardeal', unitIds: [p2.id], buildingId: tower.id });
+    for (let i = 0; i < 30; i++) world.step();
+    expect(world.garrisonCount(tower)).toBe(1);
+    const attacker = world.spawnUnit('moldova', 6, 3, 'smecher');
+    world.issue({ type: 'attack', faction: 'moldova', unitIds: [attacker.id], targetId: tower.id });
+    for (let i = 0; i < 20; i++) world.step();
+    expect(world.getBuilding(tower.id)).toBeUndefined();
+    expect(world.getUnit(p2.id)).toBeDefined();
+  });
+
+  it('delivers a carried load when sheltering in the court', () => {
+    const map = mapFromRows(['........', '........', '........', '........', '........', '........']);
+    const world = new World({ seed: 1, map });
+    const court = world.placeBuilding('curte', 'ardeal', 1, 1, true);
+    const p = world.spawnUnit('ardeal', 1, 4, 'taran');
+    p.carryKind = 'lemn';
+    p.carryAmount = 7;
+    const before = world.stock.ardeal.lemn;
+    world.issue({ type: 'garrison', faction: 'ardeal', unitIds: [p.id], buildingId: court.id });
+    for (let i = 0; i < 40; i++) world.step();
+    expect(world.garrisonCount(court)).toBe(1);
+    expect(world.stock.ardeal.lemn).toBe(before + 7);
+  });
+
+  it('sends sheltered peasants home too when their principality falls', () => {
+    const map = mapFromRows(Array.from({ length: 10 }, () => '..............'));
+    const world = new World({ seed: 1, map });
+    world.placeBuilding('curte', 'ardeal', 10, 6, true);
+    const court = world.placeBuilding('curte', 'moldova', 1, 1, true);
+    const tower = world.placeBuilding('turn', 'moldova', 6, 1, true);
+    const p = world.spawnUnit('moldova', 6, 3, 'taran');
+    world.issue({ type: 'garrison', faction: 'moldova', unitIds: [p.id], buildingId: tower.id });
+    for (let i = 0; i < 30; i++) world.step();
+    expect(world.garrisonCount(tower)).toBe(1);
+    court.hp = 0;
+    world.step();
+    expect(world.buildings.some((b) => b.faction === 'moldova')).toBe(false);
+    expect(world.units.some((u) => u.faction === 'moldova')).toBe(false);
+  });
+
+  it('never loses sheltered peasants when a walled-in tower is destroyed', () => {
+    const map = mapFromRows(['..........', '..........', '..........', '..........', '..........']);
+    const world = new World({ seed: 1, map });
+    world.placeBuilding('curte', 'ardeal', 7, 2, true);
+    const tower = world.placeBuilding('turn', 'ardeal', 2, 2, true);
+    const ids = [0, 1, 2, 3].map((i) => world.spawnUnit('ardeal', i, 4, 'taran').id);
+    world.issue({ type: 'garrison', faction: 'ardeal', unitIds: ids, buildingId: tower.id });
+    for (let i = 0; i < 60; i++) world.step();
+    expect(world.garrisonCount(tower)).toBe(4);
+    // Crowd every free tile so nobody has an empty spot to step out onto.
+    for (let ty = 0; ty < 5; ty++) {
+      for (let tx = 0; tx < 10; tx++) {
+        if (world.buildingAt(tx, ty)) continue;
+        world.spawnUnit('ardeal', tx, ty, 'ostas');
+      }
+    }
+    tower.hp = 0;
+    world.step();
+    expect(world.getBuilding(tower.id)).toBeUndefined();
+    for (const id of ids) expect(world.getUnit(id)).toBeDefined();
+  });
+
+  it('supports player nickname with default fallback and deleting a solo saved game', () => {
+    expect(sanitizeNickname('')).toBe(DEFAULT_NICKNAME);
+    expect(sanitizeNickname('   ')).toBe(DEFAULT_NICKNAME);
+    expect(sanitizeNickname('  Vlad   Țepeș  ')).toBe('Vlad Țepeș');
+
+    // Mock window.localStorage to test saveNickname, loadNickname, saveGame, loadGame, and clearSave
+    const store = new Map<string, string>();
+    const prevWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window: unknown }).window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      },
+    };
+    try {
+      expect(loadNickname()).toBe(DEFAULT_NICKNAME);
+      expect(saveNickname('Ștefan')).toBe('Ștefan');
+      expect(loadNickname()).toBe('Ștefan');
+      expect(saveNickname('')).toBe(DEFAULT_NICKNAME);
+      expect(loadNickname()).toBe(DEFAULT_NICKNAME);
+
+      const world = new World({ seed: 1600, includeOltenia: true });
+      const savedOk = saveGame({
+        version: 1,
+        savedAt: 1000,
+        player: 'oltenia',
+        nickname: 'Tudor',
+        peaceful: false,
+        difficulty: 'greu',
+        goalReached: false,
+        lost: false,
+        taxed: false,
+        camera: { x: 100, y: 100, zoom: 2 },
+        world: world.toSnapshot(),
+        ais: [],
+      });
+      expect(savedOk).toBe(true);
+      const loaded = loadGame();
+      expect(loaded).not.toBeNull();
+      expect(loaded!.player).toBe('oltenia');
+      expect(loaded!.nickname).toBe('Tudor');
+      expect(formatSaveSummary(loaded!)).toContain('Tudor · Oltenia');
+
+      // Delete solo saved game explicitly
+      clearSave();
+      expect(loadGame()).toBeNull();
+    } finally {
+      if (prevWindow === undefined) delete (globalThis as { window?: unknown }).window;
+      else (globalThis as { window: unknown }).window = prevWindow;
+    }
   });
 });

@@ -1,3 +1,5 @@
+import { armTwoTap } from './confirm';
+
 const BUBBLE_MS = 2200;
 
 interface Bubble {
@@ -31,6 +33,7 @@ export interface HudCallbacks {
   readonly onSave: () => void;
   readonly onMute: () => void;
   readonly onMenu: () => void;
+  readonly onAbandon?: () => void;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -63,6 +66,7 @@ export class Hud {
   private readonly menuBtn = byId<HTMLButtonElement>('btn-menu');
   private readonly pauseBanner = byId<HTMLDivElement>('pause-banner');
   private readonly resumeBtn = byId<HTMLButtonElement>('btn-resume');
+  private readonly abandonBtn = document.getElementById('btn-abandon') as HTMLButtonElement | null;
   private readonly haraciBox = byId<HTMLDivElement>('haraci-box');
   private readonly haraciText = byId<HTMLDivElement>('haraci-text');
   private readonly haraciTimer = byId<HTMLDivElement>('haraci-timer');
@@ -87,6 +91,9 @@ export class Hud {
     this.idleBtn.addEventListener('click', () => callbacks.onIdlePeasant(), { signal });
     this.pauseBtn.addEventListener('click', () => callbacks.onPause(), { signal });
     this.resumeBtn.addEventListener('click', () => callbacks.onPause(), { signal });
+    if (this.abandonBtn) {
+      armTwoTap(this.abandonBtn, 'Sigur? Atinge iar ca să ștergi', () => callbacks.onAbandon?.(), signal);
+    }
     this.speedBtn.addEventListener('click', () => callbacks.onSpeed(), { signal });
     this.saveBtn.addEventListener('click', () => callbacks.onSave(), { signal });
     this.muteBtn.addEventListener('click', () => callbacks.onMute(), { signal });

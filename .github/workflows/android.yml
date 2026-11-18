@@ -2,7 +2,7 @@ name: Android Debug APK
 
 on:
   push:
-    branches: [main, milestone-2, milestone3]
+    branches: [main, milestone-1-scaffold, milestone4]
     tags: ['v*']
   workflow_dispatch:
 
@@ -28,12 +28,15 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default list includes the retired 'tools' package, which makes sdkmanager fail.
+          packages: platform-tools
 
       - name: Install dependencies and build web bundle
         run: |
           npm ci
           npm run test
-          npm run cap:sync
+          npm run android:sync
 
       - name: Build Android debug APK
         working-directory: android

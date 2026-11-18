@@ -47,6 +47,7 @@ const MAX_UNIT_CAP = 48;
 const TOWER_RANGE = 6 * SUB;
 const TOWER_COOLDOWN = 12;
 const TOWER_BASE_DAMAGE = 7;
+const TOWER_GARRISON_DAMAGE = 3;
 /** Stegarul aura radius and Han healing radius. */
 const STEGAR_RADIUS = 4 * SUB;
 const HAN_RADIUS = 4 * SUB;
@@ -130,6 +131,8 @@ const REPATH_TICKS = 8;
 export type ResourceKind = 'lemn' | 'prune' | 'palinca';
 export type Stock = Record<ResourceKind, number>;
 
+type Resume = { resource: 'lemn' | 'prune'; tile: number; buildingId: number };
+
 export type Order =
   | { type: 'idle' }
   | { type: 'move' }
@@ -148,7 +151,7 @@ export type Order =
       buildingId: number;
       phase: 'going' | 'working';
       /** The job he was pulled away from, to go back to afterwards. */
-      resume: { resource: 'lemn' | 'prune'; tile: number; buildingId: number } | null;
+      resume: Resume | null;
     }
   | {
       type: 'attack';
@@ -164,7 +167,19 @@ export type Order =
       type: 'attackMove';
       gx: number;
       gy: number;
+    }
+  | {
+      type: 'garrison';
+      buildingId: number;
+      resume: Resume | null;
     };
+
+/** The gathering job a peasant should go back to after a detour (building, sheltering). */
+function resumeOf(o: Order): Resume | null {
+  if (o.type === 'gather') return { resource: o.resource, tile: o.tile, buildingId: o.buildingId };
+  if (o.type === 'build' || o.type === 'garrison') return o.resume;
+  return null;
+}
 
 const ORDER_CODE: Readonly<Record<Order['type'], number>> = {
   idle: 0,
@@ -173,6 +188,7 @@ const ORDER_CODE: Readonly<Record<Order['type'], number>> = {
   build: 3,
   attack: 4,
   attackMove: 5,
+  garrison: 6,
 };
 
 export interface Unit {
@@ -217,6 +233,15 @@ export interface FactionDebuffs {
   panaCurent: number;
 }
 
+export interface GarrisonedUnit {
+  readonly id: number;
+  readonly hp: number;
+  readonly maxHp: number;
+  readonly carryKind: 'lemn' | 'prune';
+  readonly carryAmount: number;
+  readonly resume: Resume | null;
+}
+
 export interface Building {
   readonly id: number;
   readonly kind: BuildingKind;
@@ -244,17 +269,23 @@ export interface Building {
   researching?: TechId | null;
   researchLeft?: number;
   researchTarget?: FactionId;
+  /** Villagers currently sheltered inside this defensive building. */
+  garrison?: GarrisonedUnit[];
 }
 
 type UnitIds = readonly number[];
 export type Command =
   | { readonly type: 'move'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly tx: number; readonly ty: number }
-  /** "Do the obvious thing here": chop, pick, help build/repair, attack, or just walk. */
+  /** "Do the obvious thing here": chop, pick, help build/repair, garrison, attack, or just walk. */
   | { readonly type: 'act'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly tx: number; readonly ty: number }
   | { readonly type: 'attack'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly targetId: number }
   | { readonly type: 'attackMove'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly tx: number; readonly ty: number }
   | { readonly type: 'build'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly kind: BuildingKind; readonly tx: number; readonly ty: number }
   | { readonly type: 'buildLine'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly kind: BuildingKind; readonly tiles: readonly (readonly [number, number])[] }
+  /** Send peasants into a specific defensive building (`buildingId`), or the nearest one with room. */
+  | { readonly type: 'garrison'; readonly faction: FactionId; readonly unitIds: UnitIds; readonly buildingId?: number }
+  /** Release all sheltered peasants from a defensive building back to work. */
+  | { readonly type: 'ungarrison'; readonly faction: FactionId; readonly buildingId: number }
   /** `kind` defaults to the first thing the building trains. */
   | { readonly type: 'train'; readonly faction: FactionId; readonly buildingId: number; readonly kind?: UnitKind }
   | { readonly type: 'cancelQueue'; readonly faction: FactionId; readonly buildingId: number }
@@ -270,7 +301,7 @@ export type Command =
   | { readonly type: 'haraci'; readonly faction: FactionId; readonly pay: boolean };
 
 /** What an 'act' command at a tile would do. */
-export type ActKind = 'build' | 'plums' | 'wood' | 'attack' | 'move';
+export type ActKind = 'build' | 'plums' | 'wood' | 'attack' | 'garrison' | 'move';
 
 /** Things the renderer may want to react to. Never read by the simulation. */
 export type SimEvent =
@@ -279,6 +310,8 @@ export type SimEvent =
   | { readonly type: 'distilled'; readonly buildingId: number }
   | { readonly type: 'trained'; readonly unitId: number }
   | { readonly type: 'full'; readonly unitId: number }
+  | { readonly type: 'garrisoned'; readonly buildingId: number; readonly unitId: number }
+  | { readonly type: 'ungarrisoned'; readonly buildingId: number; readonly unitId: number }
   /** `count`: how many it touched (tourists, jobs hurried); 0 = it backfired. */
   | {
       readonly type: 'ability';
@@ -422,7 +455,7 @@ export class World {
         ...u,
         path: [...u.path],
         order:
-          u.order.type === 'build'
+          u.order.type === 'build' || u.order.type === 'garrison'
             ? { ...u.order, resume: u.order.resume ? { ...u.order.resume } : null }
             : { ...u.order },
       })),
@@ -430,6 +463,10 @@ export class World {
         ...b,
         queue: [...b.queue],
         rally: b.rally ? { ...b.rally } : null,
+        garrison: (b.garrison ?? []).map((g) => ({
+          ...g,
+          resume: g.resume ? { ...g.resume } : null,
+        })),
       })),
       pending: this.pending.map((c) => ('unitIds' in c ? { ...c, unitIds: [...c.unitIds] } : { ...c })),
       forestChanges: this.hasCustomMap ? [] : this.collectForestChanges(),
@@ -501,7 +538,7 @@ export class World {
         ...u,
         path: [...u.path],
         order:
-          u.order.type === 'build'
+          u.order.type === 'build' || u.order.type === 'garrison'
             ? { ...u.order, resume: u.order.resume ? { ...u.order.resume } : null }
             : { ...u.order },
       });
@@ -511,6 +548,10 @@ export class World {
         ...b,
         queue: [...b.queue],
         rally: b.rally ? { ...b.rally } : null,
+        garrison: (b.garrison ?? []).map((g) => ({
+          ...g,
+          resume: g.resume ? { ...g.resume } : null,
+        })),
       };
       world.buildings.push(copy);
       const def = BUILDINGS[copy.kind];
@@ -582,7 +623,28 @@ export class World {
   unitCount(faction: FactionId, kind?: UnitKind): number {
     let n = 0;
     for (const u of this.units) if (u.faction === faction && (kind === undefined || u.kind === kind)) n++;
+    if (kind === undefined || kind === 'taran') {
+      for (const b of this.buildings) {
+        if (b.faction === faction && b.garrison) n += b.garrison.length;
+      }
+    }
     return n;
+  }
+
+  garrisonCap(building: Building): number {
+    return BUILDINGS[building.kind].garrisonCap ?? 0;
+  }
+
+  garrisonCount(building: Building): number {
+    return building.garrison?.length ?? 0;
+  }
+
+  canGarrison(faction: FactionId, building: Building): boolean {
+    return (
+      building.faction === faction &&
+      building.done &&
+      this.garrisonCount(building) < this.garrisonCap(building)
+    );
   }
 
   /** The faction's (first) finished court, if it still stands. */
@@ -765,6 +827,7 @@ export class World {
       if (building.kind === 'livada' && building.hp >= building.maxHp) return 'plums';
       if (building.hp < building.maxHp) return 'build';
       if (building.kind === 'livada') return 'plums';
+      if (building.kind === 'turn' && this.canGarrison(faction, building)) return 'garrison';
       return 'move';
     }
     if (this.map.inBounds(tx, ty)) {
@@ -795,12 +858,19 @@ export class World {
 
   // --- Setup helpers (also used by tests) -------------------------------------
 
-  spawnUnit(faction: FactionId, tx: number, ty: number, kind: UnitKind = 'taran'): Unit {
+  /** `back` is only passed when an existing unit comes back (e.g. out of a shelter). */
+  spawnUnit(
+    faction: FactionId,
+    tx: number,
+    ty: number,
+    kind: UnitKind = 'taran',
+    back?: { readonly id: number; readonly hp: number; readonly maxHp: number },
+  ): Unit {
     const def = FACTIONS[faction].units[kind];
     const x = tx * SUB + HALF;
     const y = ty * SUB + HALF;
     const unit: Unit = {
-      id: this.nextId++,
+      id: back?.id ?? this.nextId++,
       faction,
       kind,
       x,
@@ -811,8 +881,8 @@ export class World {
       speed: Math.floor((BASE_SPEED * (def.speedPercent ?? FACTIONS[faction].speedPercent)) / 100),
       facing: 1,
       order: { type: 'idle' },
-      hp: def.hp,
-      maxHp: def.hp,
+      hp: back?.hp ?? def.hp,
+      maxHp: back?.maxHp ?? def.hp,
       damage: def.damage,
       attackCooldown: def.cooldown,
       cooldown: 0,
@@ -850,6 +920,7 @@ export class World {
       rally: null,
       researching: null,
       researchLeft: 0,
+      garrison: [],
     };
     this.buildings.push(building);
     const fCode = factionCode(faction);
@@ -948,6 +1019,12 @@ export class World {
       case 'buildLine':
         this.applyBuildLine(command);
         break;
+      case 'garrison':
+        this.applyGarrison(command.faction, command.unitIds, command.buildingId);
+        break;
+      case 'ungarrison':
+        this.applyUngarrison(command.faction, command.buildingId, true);
+        break;
       case 'train': {
         const building = this.getBuilding(command.buildingId);
         if (!building) break;
@@ -1011,6 +1088,11 @@ export class World {
       for (const unit of units) this.orderAttack(unit, building.id);
     } else if (kind === 'build' && building) {
       for (const unit of units) this.orderBuild(unit, building);
+    } else if (kind === 'garrison' && building) {
+      for (const unit of units) {
+        if (unit.kind === 'taran') this.orderGarrison(unit, building);
+        else this.orderMove([unit], command.tx, command.ty);
+      }
     } else if (kind === 'plums' && building) {
       for (const unit of units) this.orderPickPlums(unit, building);
     } else if (kind === 'wood') {
@@ -1024,6 +1106,78 @@ export class World {
       }
     } else {
       this.orderMove(units, command.tx, command.ty);
+    }
+  }
+
+  private nearestShelter(unit: Unit, reserved?: ReadonlyMap<number, number>): Building | undefined {
+    let best: Building | undefined;
+    let bestD = Infinity;
+    for (const b of this.buildings) {
+      if (!this.canGarrison(unit.faction, b)) continue;
+      const incoming = reserved?.get(b.id) ?? 0;
+      if (this.garrisonCount(b) + incoming >= this.garrisonCap(b)) continue;
+      const size = BUILDINGS[b.kind].size;
+      const cx = (b.tx * 2 + size) * HALF;
+      const cy = (b.ty * 2 + size) * HALF;
+      const d = distSq(cx, cy, unit.x, unit.y);
+      if (d < bestD) {
+        best = b;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  private applyGarrison(faction: FactionId, unitIds: UnitIds, buildingId?: number): void {
+    const peasants = this.ownUnits(faction, unitIds).filter((u) => u.kind === 'taran');
+    if (peasants.length === 0) return;
+    if (buildingId !== undefined) {
+      const building = this.getBuilding(buildingId);
+      if (!building || !this.canGarrison(faction, building)) return;
+      for (const unit of peasants) this.orderGarrison(unit, building);
+      return;
+    }
+    const reserved = new Map<number, number>();
+    for (const unit of peasants) {
+      const shelter = this.nearestShelter(unit, reserved) ?? this.nearestShelter(unit);
+      if (!shelter) continue;
+      reserved.set(shelter.id, (reserved.get(shelter.id) ?? 0) + 1);
+      this.orderGarrison(unit, shelter);
+    }
+  }
+
+  /**
+   * Let sheltered peasants out next to the building. `evacuate` is used when the
+   * building is being removed: then nobody may stay behind, so peasants may share a tile.
+   */
+  private applyUngarrison(faction: FactionId, buildingId: number, resumeWork: boolean, evacuate = false): void {
+    const building = this.getBuilding(buildingId);
+    if (!building || building.faction !== faction || !building.garrison || building.garrison.length === 0) return;
+    const def = BUILDINGS[building.kind];
+    const taken = new Set<number>();
+    for (const u of this.units) taken.add(this.tileOf(u));
+    const fCode = factionCode(faction);
+    const ex = building.tx + (def.size >> 1);
+    const ey = building.ty + def.size;
+    while (building.garrison.length > 0) {
+      let spot = nearestPassable(this.map, ex, ey, taken, fCode);
+      if (spot === -1 && evacuate) spot = nearestPassable(this.map, ex, ey, new Set(), fCode);
+      if (spot === -1) break;
+      const g = building.garrison.shift()!;
+      taken.add(spot);
+      const sx = spot % this.map.width;
+      const unit = this.spawnUnit(faction, sx, (spot - sx) / this.map.width, 'taran', g);
+      unit.carryKind = g.carryKind;
+      unit.carryAmount = g.carryAmount;
+      this.events.push({ type: 'ungarrisoned', buildingId: building.id, unitId: unit.id });
+      if (resumeWork && g.resume) {
+        if (g.resume.resource === 'prune') {
+          const orchard = this.getBuilding(g.resume.buildingId);
+          if (orchard) this.orderPickPlums(unit, orchard);
+        } else {
+          this.orderChop(unit, g.resume.tile);
+        }
+      }
     }
   }
 
@@ -1397,14 +1551,17 @@ export class World {
   private orderBuild(unit: Unit, building: Building): void {
     const approach = this.approachTile(building, unit, this.unitDestinations(unit.id));
     if (approach === -1) return;
-    const o = unit.order;
-    const resume =
-      o.type === 'gather'
-        ? { resource: o.resource, tile: o.tile, buildingId: o.buildingId }
-        : o.type === 'build'
-          ? o.resume
-          : null;
+    const resume = resumeOf(unit.order);
     unit.order = { type: 'build', buildingId: building.id, phase: 'going', resume };
+    this.sendTo(unit, approach);
+  }
+
+  private orderGarrison(unit: Unit, building: Building): void {
+    if (unit.kind !== 'taran') return;
+    const approach = this.approachTile(building, unit, this.unitDestinations(unit.id));
+    if (approach === -1) return;
+    const resume = resumeOf(unit.order);
+    unit.order = { type: 'garrison', buildingId: building.id, resume };
     this.sendTo(unit, approach);
   }
 
@@ -1550,6 +1707,9 @@ export class World {
         break;
       case 'build':
         this.stepBuild(unit, order);
+        break;
+      case 'garrison':
+        this.stepGarrison(unit, order);
         break;
       case 'attack':
         this.stepAttack(unit, order);
@@ -1770,15 +1930,16 @@ export class World {
       if (building.kind === 'curte' && !courtLeft) fallen.push(building.faction);
     }
     for (const faction of fallen) {
-      // No court, no principality: its people go home and its buildings stand empty no more.
+      // No court, no principality: its buildings stand empty no more and its people go home.
+      // Buildings first: tearing down a shelter lets its peasants out, and they must go home too.
+      for (let i = this.buildings.length - 1; i >= 0; i--) {
+        if (this.buildings[i]!.faction === faction) this.removeBuilding(i);
+      }
       for (let i = this.units.length - 1; i >= 0; i--) {
         const unit = this.units[i]!;
         if (unit.faction !== faction) continue;
         this.events.push({ type: 'left', unitId: unit.id });
         this.units.splice(i, 1);
-      }
-      for (let i = this.buildings.length - 1; i >= 0; i--) {
-        if (this.buildings[i]!.faction === faction) this.removeBuilding(i);
       }
       this.haraci[faction].due = 0;
       this.events.push({ type: 'eliminated', faction });
@@ -1794,6 +1955,9 @@ export class World {
 
   private removeBuilding(index: number): void {
     const building = this.buildings[index]!;
+    if (building.garrison && building.garrison.length > 0) {
+      this.applyUngarrison(building.faction, building.id, false, true);
+    }
     const def = BUILDINGS[building.kind];
     for (let dy = 0; dy < def.size; dy++) {
       for (let dx = 0; dx < def.size; dx++) {
@@ -1964,6 +2128,58 @@ export class World {
     }
   }
 
+  private stepGarrison(unit: Unit, order: Extract<Order, { type: 'garrison' }>): void {
+    const building = this.getBuilding(order.buildingId);
+    if (!building || !building.done || building.faction !== unit.faction) {
+      unit.order = { type: 'idle' };
+      return;
+    }
+    if (!this.canGarrison(unit.faction, building)) {
+      const nextShelter = this.nearestShelter(unit);
+      if (nextShelter) {
+        this.orderGarrison(unit, nextShelter);
+      } else {
+        this.events.push({ type: 'full', unitId: unit.id });
+        unit.order = { type: 'idle' };
+      }
+      return;
+    }
+    if (!this.isAdjacent(building, this.tileOf(unit))) {
+      this.walk(unit);
+      if (unit.path.length > 0) return;
+      if (!this.isAdjacent(building, this.tileOf(unit))) {
+        const approach = this.approachTile(building, unit, this.unitDestinations(unit.id));
+        if (approach === -1) {
+          unit.order = { type: 'idle' };
+          return;
+        }
+        this.sendTo(unit, approach);
+        return;
+      }
+    }
+    if (!this.canGarrison(unit.faction, building)) {
+      unit.order = { type: 'idle' };
+      return;
+    }
+    // Only the court takes deliveries; anywhere else the peasant keeps the load on his back.
+    if (unit.carryAmount > 0 && building.kind === 'curte') {
+      this.stock[unit.faction][unit.carryKind] += unit.carryAmount;
+      unit.carryAmount = 0;
+    }
+    if (!building.garrison) building.garrison = [];
+    building.garrison.push({
+      id: unit.id,
+      hp: unit.hp,
+      maxHp: unit.maxHp,
+      carryKind: unit.carryKind,
+      carryAmount: unit.carryAmount,
+      resume: order.resume,
+    });
+    unit.expires = -1;
+    unit.hp = 0;
+    this.events.push({ type: 'garrisoned', buildingId: building.id, unitId: unit.id });
+  }
+
   private stepBuilding(building: Building): void {
     if (!building.done || building.hp <= 0) return;
     const def = BUILDINGS[building.kind];
@@ -2022,7 +2238,8 @@ export class World {
       }
     }
 
-    if (building.kind === 'turn') {
+    const garrisoned = building.garrison?.length ?? 0;
+    if (building.kind === 'turn' || (building.kind === 'curte' && garrisoned > 0)) {
       if (building.sawLeft > 0) building.sawLeft--;
       if (building.sawLeft <= 0) {
         const cx = (building.tx * 2 + def.size) * HALF;
@@ -2038,11 +2255,12 @@ export class World {
           }
         }
         if (bestEnemy) {
-          let dmg = TOWER_BASE_DAMAGE + this.era[building.faction] * 2;
+          const baseDmg = building.kind === 'turn' ? TOWER_BASE_DAMAGE : 4;
+          let dmg = baseDmg + this.era[building.faction] * 2 + garrisoned * TOWER_GARRISON_DAMAGE;
           if (bestEnemy.shield > 0) dmg = Math.max(1, dmg >> 1);
           bestEnemy.hp -= dmg;
           this.events.push({ type: 'hit', x: bestEnemy.x, y: bestEnemy.y });
-          building.sawLeft = TOWER_COOLDOWN;
+          building.sawLeft = Math.max(6, TOWER_COOLDOWN - garrisoned);
         }
       }
     }
@@ -2152,6 +2370,7 @@ export class World {
     }
     for (const b of this.buildings) {
       values.push(b.id, b.hp, b.buildLeft, b.done ? 1 : 0, b.queue.length, b.trainLeft, b.distillLeft, b.advanceLeft);
+      if (b.garrison && b.garrison.length > 0) values.push(b.garrison.length);
     }
     return fnv1a(values);
   }

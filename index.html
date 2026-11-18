@@ -49,7 +49,10 @@
       <div id="bubbles"></div>
       <div id="pause-banner" class="hidden">
         <span>PAUZĂ</span>
-        <button type="button" id="btn-resume">Continuă</button>
+        <div id="pause-actions">
+          <button type="button" id="btn-resume">Continuă</button>
+          <button type="button" id="btn-abandon" class="danger">Închide / Șterge partida</button>
+        </div>
       </div>
       <div id="bottom">
         <div id="toast" class="hidden"></div>
@@ -62,6 +65,16 @@
         <h1>Unirea</h1>
         <p id="menu-sub">no, las’ că vedem · anul 1600</p>
         <div id="menu-continue" class="hidden"></div>
+        <label id="menu-nick-row" for="menu-nickname">
+          <span>Poreclă / Nume:</span>
+          <input
+            type="text"
+            id="menu-nickname"
+            maxlength="24"
+            placeholder="Voievod (implicit)"
+            autocomplete="off"
+          />
+        </label>
         <p>Alege-ți principatul. Ceilalți trei îți vin la curte cu oastea, iar Poarta vine după haraci.</p>
         <label id="menu-mode">
           <input type="checkbox" id="menu-peace" />
