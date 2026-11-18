@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { Difficulty } from './ai/skirmish';
 import { SoundEngine } from './audio/sound';
 import { FACTIONS, PLAYABLE_FACTION_IDS, type FactionId } from './data/factions';
+import type { CommandSink } from './net/lockstep';
 import { GameScene } from './render/GameScene';
 import {
   clearSave,
@@ -14,10 +15,12 @@ import {
   type SaveGame,
 } from './save';
 import { armTwoTap } from './ui/confirm';
+import { initMultiplayer } from './ui/multiplayer';
 import './ui/hud.css';
 
 const sound = new SoundEngine();
 let activeGame: Phaser.Game | null = null;
+let activeExit: (() => void) | null = null;
 let selectedDifficulty: Difficulty = 'normal';
 
 function launch(options: {
@@ -28,19 +31,20 @@ function launch(options: {
   mapScale?: number;
   includeOltenia?: boolean;
   save?: SaveGame;
-}): void {
+  commandSink?: CommandSink;
+  online?: { seed: number; humanFactions: readonly FactionId[] };
+  /** Called once when this game is left for the menu. */
+  onExit?: () => void;
+}): GameScene {
   sound.unlock();
   document.getElementById('menu')?.classList.add('hidden');
-  activeGame?.destroy(true);
+  exitGame();
+  const { onExit, ...sceneOptions } = options;
+  activeExit = onExit ?? null;
   const scene = new GameScene({
-    ...options,
+    ...sceneOptions,
     sound,
-    onReturnToMenu: () => {
-      activeGame?.destroy(true);
-      activeGame = null;
-      document.getElementById('menu')?.classList.remove('hidden');
-      showMenu();
-    },
+    onReturnToMenu: returnToMenu,
   });
   activeGame = new Phaser.Game({
     type: Phaser.AUTO,
@@ -59,6 +63,22 @@ function launch(options: {
     },
     scene: [scene],
   });
+  return scene;
+}
+
+/** Destroy the running game (if any) and run its exit hook. */
+function exitGame(): void {
+  activeGame?.destroy(true);
+  activeGame = null;
+  const exit = activeExit;
+  activeExit = null;
+  exit?.();
+}
+
+function returnToMenu(): void {
+  exitGame();
+  document.getElementById('menu')?.classList.remove('hidden');
+  showMenu();
 }
 
 function wireDifficultyButtons(): void {
@@ -191,6 +211,17 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   });
 }
 
+const multiplayer = initMultiplayer({
+  nickname: () => saveNickname((document.getElementById('menu-nickname') as HTMLInputElement | null)?.value),
+  hostSettings: () => ({
+    peaceful: (document.getElementById('menu-peace') as HTMLInputElement | null)?.checked ?? false,
+    large: (document.getElementById('menu-map-large') as HTMLInputElement | null)?.checked ?? false,
+    difficulty: selectedDifficulty,
+  }),
+  launch: (options) => launch(options),
+  returnToMenu,
+});
+
 // "?faction=moldova" skips the menu and "&peace=1" keeps the neighbour quiet
 // (handy while developing).
 const params = new URLSearchParams(location.search);
@@ -206,4 +237,9 @@ if (preset) {
     mapScale: isLarge ? 1.5 : 1,
     includeOltenia: preset === 'oltenia' || isLarge,
   });
-} else showMenu();
+} else {
+  showMenu();
+  // "?room=ABCDE" opens the multiplayer panel with the code filled in.
+  const room = params.get('room');
+  if (room) multiplayer.open(room);
+}

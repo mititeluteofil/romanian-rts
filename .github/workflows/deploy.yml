@@ -1,10 +1,11 @@
 name: CI & Deploy to Cloudflare Workers
 
+# Every PR and every push to a long-lived branch gets typecheck, tests, a build and a
+# Worker dry run. Only milestone-1-scaffold (the Workers Builds production branch) deploys.
 on:
   push:
-    branches: [main, milestone-1-scaffold]
+    branches: [main, milestone-1-scaffold, milestone4]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -39,8 +40,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Bundles the Worker (relay + Durable Object + static assets) without uploading anything.
+      - name: Check Worker bundle (dry run)
+        run: npx wrangler@4 deploy --dry-run --outdir worker-dist
+
       - name: Deploy to Cloudflare Workers
-        if: github.event_name == 'push' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        if: github.event_name == 'push' && github.ref == 'refs/heads/milestone-1-scaffold' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}

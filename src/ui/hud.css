@@ -579,3 +579,167 @@ body {
   border-color: var(--edge);
   color: #ffe082;
 }
+
+#hud-controls button.hidden {
+  display: none;
+}
+
+/* --- Online multiplayer ------------------------------------------------------ */
+
+#btn-mp-open,
+#mp-panel button {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: bold;
+  color: var(--ink);
+  background: #2c3a4a;
+  border: 2px solid var(--edge);
+  border-bottom-width: 4px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+#mp-panel button.primary {
+  background: #7a5a16;
+  color: #ffe082;
+}
+
+#mp-panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#mp-panel.hidden,
+#mp-panel button.hidden,
+#mp-start.hidden,
+#mp-lobby.hidden {
+  display: none;
+}
+
+#mp-panel {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--edge);
+  background: #232a1f;
+}
+
+#mp-join-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+#mp-join-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  font: inherit;
+  font-size: 18px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--ink);
+  background: #1b2218;
+  border: 1px solid var(--edge);
+}
+
+#mp-join-form button {
+  width: auto;
+  margin-top: 0;
+}
+
+#mp-room-code {
+  font-size: 26px;
+  letter-spacing: 6px;
+  color: #ffe082;
+  user-select: all;
+}
+
+#mp-players {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+#mp-players li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-left: 8px solid var(--faction, var(--edge));
+  background: #2c2f26;
+  font-size: 14px;
+}
+
+#mp-players li span {
+  opacity: 0.85;
+  font-size: 12px;
+}
+
+#mp-status {
+  min-height: 1.2em;
+  color: #ffcdd2;
+}
+
+/* While in the multiplayer panel the solo-only parts step aside; guests also
+   lose the match settings, which belong to the host. */
+#menu-box.mp-mode #menu-factions,
+#menu-box.mp-mode #menu-continue,
+#menu-box.mp-mode #menu-intro,
+#menu-box.mp-mode #btn-mp-open,
+#menu-box.mp-guest #menu-mode,
+#menu-box.mp-guest #menu-map-size,
+#menu-box.mp-guest #menu-difficulty {
+  display: none;
+}
+
+#net-banner {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 50;
+  width: min(calc(100% - 32px), 420px);
+  padding: 16px;
+  transform: translate(-50%, -50%);
+  background: var(--panel);
+  border: 2px solid #e57373;
+  font-family: var(--font);
+  color: var(--ink);
+  text-align: center;
+}
+
+#net-banner.hidden,
+#net-banner button.hidden {
+  display: none;
+}
+
+#net-banner p {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+#net-banner-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+#net-banner button {
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: bold;
+  color: var(--ink);
+  background: #3d4a2c;
+  border: 2px solid var(--edge);
+  cursor: pointer;
+}
+
+#net-banner button.primary {
+  background: #7a5a16;
+  color: #ffe082;
+}
